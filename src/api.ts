@@ -12,6 +12,7 @@ import { createWebhooksRouter } from "./api/webhooks";
 import { createLinqWebhookRouter } from "./api/linqWebhook";
 import { createOfframpRouter } from "./api/offramp";
 import { createNgnRouter } from "./api/ngn";
+import { feesRouter } from "./api/fees";
 import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
@@ -253,6 +254,9 @@ export function createApp(): express.Application {
   app.use("/offramp", createOfframpRouter());
   // Naira rails: buying with naira, and bills paid out of the wallet.
   app.use("/ngn", createNgnRouter());
+  // What the client should charge, and where to send it. Server-held so the
+  // amount is never compiled into an APK.
+  app.use("/fees", feesRouter());
   app.use("/graphql", createGraphQLMiddleware());
 
   // ─── Assets routes ───────────────────────────────────────────────────────
