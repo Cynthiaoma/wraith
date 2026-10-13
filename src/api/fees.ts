@@ -21,12 +21,57 @@ function isClassicAddress(value: string): boolean {
 }
 
 export interface PlatformFee {
-  /** Whole units of the fee asset, as a decimal string. */
+  /**
+   * Whole units of the fee asset, as a decimal string — what to charge.
+   *
+   * When the caller passed the amount being sent this is computed for it;
+   * without one it is the floor, which is what a client too old to send an
+   * amount will charge. That fallback is deliberately the smallest honest
+   * number rather than the largest: an old client undercharging costs us, and
+   * overcharging costs the user.
+   */
   amount: string;
   assetCode: string;
   /** Null for native XLM, which has no issuer. */
   assetIssuer: string | null;
   destination: string;
+  /** Percent of the sent amount, when the fee scales. Absent when it is flat. */
+  percent?: string;
+  /** Floor and cap, present only alongside `percent`. */
+  min?: string;
+  max?: string;
+}
+
+/** Stellar carries seven decimal places; anything beyond them cannot be sent. */
+const STROOP_DP = 7;
+
+function validRate(value: string | undefined): number | null {
+  const raw = value?.trim();
+  if (!raw) return null;
+  const rate = Number(raw);
+  // A fee over 100% is always a misconfiguration, and charging it would take
+  // more than the user is sending.
+  return Number.isFinite(rate) && rate > 0 && rate <= 100 ? rate : null;
+}
+
+/**
+ * The fee for sending `sent`, as a decimal string.
+ *
+ * Rounded DOWN to stroop precision. Rounding is a choice about who absorbs the
+ * remainder, and on a charge the user did not ask for it should not be them.
+ * The floor is applied afterwards, so rounding down can never produce a fee of
+ * zero where one was configured.
+ */
+export function feeForAmount(
+  sent: number,
+  policy: { percent: number; min: number | null; max: number | null },
+): string {
+  const raw = (sent * policy.percent) / 100;
+  const factor = 10 ** STROOP_DP;
+  let fee = Math.floor(raw * factor) / factor;
+  if (policy.max !== null) fee = Math.min(fee, policy.max);
+  if (policy.min !== null) fee = Math.max(fee, policy.min);
+  return fee.toFixed(STROOP_DP).replace(/0+$/, '').replace(/\.$/, '');
 }
 
 function validAmount(value: string | undefined): string | null {
@@ -50,30 +95,69 @@ function validAmount(value: string | undefined): string | null {
  * the user did not ask for; if we cannot say exactly what it is and where it
  * goes, we do not charge it.
  */
-export function configuredFees(): Record<string, PlatformFee> {
+export function configuredFees(sentAmount?: number): Record<string, PlatformFee> {
   const destination = process.env.VEIL_FEE_DESTINATION?.trim();
   if (!destination || !isClassicAddress(destination)) return {};
 
   const fees: Record<string, PlatformFee> = {};
+  const percent = validRate(process.env.VEIL_FEE_PERCENT);
+
+  /**
+   * One asset's entry, flat or proportional.
+   *
+   * A flat fee is regressive here and the numbers are stark: 0.1 USDC is 10%
+   * of a 1 USDC send and 0.01% of a 1,000 one, so the people being onboarded
+   * with a thousand naira pay the heaviest rate while large senders pay
+   * nothing worth naming. A percent with a floor and a cap keeps the small
+   * sends cheap without making the large ones punitive.
+   */
+  const entry = (code: string, issuer: string | null, flat: string | null, min: string | null, max: string | null): PlatformFee | null => {
+    if (percent === null) {
+      // No rate configured: the flat amount, exactly as before.
+      return flat ? { amount: flat, assetCode: code, assetIssuer: issuer, destination } : null;
+    }
+    const floor = min ? Number(min) : flat ? Number(flat) : null;
+    const cap = max ? Number(max) : null;
+    // Without an amount to price, answer with the floor — see `amount` above.
+    const amount =
+      sentAmount !== undefined && Number.isFinite(sentAmount) && sentAmount > 0
+        ? feeForAmount(sentAmount, { percent, min: floor, max: cap })
+        : (floor ?? 0).toFixed(STROOP_DP).replace(/0+$/, '').replace(/\.$/, '');
+    if (!validAmount(amount)) return null;
+    return {
+      amount,
+      assetCode: code,
+      assetIssuer: issuer,
+      destination,
+      percent: String(percent),
+      ...(floor !== null ? { min: String(floor) } : {}),
+      ...(cap !== null ? { max: String(cap) } : {}),
+    };
+  };
 
   // USDC, or whichever issued asset VEIL_FEE_ASSET_CODE names.
   const issuedCode = process.env.VEIL_FEE_ASSET_CODE?.trim() || "USDC";
-  const issuedAmount = validAmount(process.env.VEIL_FEE_AMOUNT);
   const issuer = process.env.VEIL_FEE_ASSET_ISSUER?.trim();
-  if (issuedAmount && issuer && isClassicAddress(issuer)) {
-    fees[issuedCode] = {
-      amount: issuedAmount,
-      assetCode: issuedCode,
-      assetIssuer: issuer,
-      destination,
-    };
+  if (issuer && isClassicAddress(issuer)) {
+    const fee = entry(
+      issuedCode,
+      issuer,
+      validAmount(process.env.VEIL_FEE_AMOUNT),
+      validAmount(process.env.VEIL_FEE_MIN),
+      validAmount(process.env.VEIL_FEE_MAX),
+    );
+    if (fee) fees[issuedCode] = fee;
   }
 
   // Native XLM, which has no issuer and needs no trustline.
-  const xlmAmount = validAmount(process.env.VEIL_FEE_AMOUNT_XLM);
-  if (xlmAmount) {
-    fees["XLM"] = { amount: xlmAmount, assetCode: "XLM", assetIssuer: null, destination };
-  }
+  const xlm = entry(
+    "XLM",
+    null,
+    validAmount(process.env.VEIL_FEE_AMOUNT_XLM),
+    validAmount(process.env.VEIL_FEE_MIN_XLM),
+    validAmount(process.env.VEIL_FEE_MAX_XLM),
+  );
+  if (xlm) fees["XLM"] = xlm;
 
   return fees;
 }
@@ -85,9 +169,14 @@ export function feesRouter(): Router {
    * Unauthenticated and uncached: it carries no personal data, and a stale
    * fee is one a user was shown but did not agree to.
    */
-  router.get("/", (_req: Request, res: Response) => {
+  router.get("/", (req: Request, res: Response) => {
     res.setHeader("Cache-Control", "no-store");
-    const fees = configuredFees();
+    // `?amount=` is the amount being sent, so the fee can scale with it. A
+    // client too old to send one gets the floor, which is why this is optional
+    // rather than required: the shipped APKs predate it and must keep working.
+    const raw = Number(String(req.query["amount"] ?? ""));
+    const sent = Number.isFinite(raw) && raw > 0 ? raw : undefined;
+    const fees = configuredFees(sent);
     const assets = Object.keys(fees);
     // `enabled: false` rather than a 404, so a client can tell "no fee today"
     // from "this backend is too old to know about fees" and does not read a
