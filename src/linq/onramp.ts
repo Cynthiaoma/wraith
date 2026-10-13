@@ -46,6 +46,14 @@ const BASE_URL =
 
 const TIMEOUT_MS = 15_000;
 
+/** The first of `values` that is a non-empty string, or undefined. */
+function firstString(...values: unknown[]): string | undefined {
+  for (const value of values) {
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
 /**
  * One logical operation's whole budget, retries included — the same ceiling
  * `client.ts` uses, and for the same reason: a server that answers a person
@@ -116,9 +124,14 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   try {
     parsed = text ? JSON.parse(text) : null;
   } catch {
-    // Not JSON. Their message is more useful than ours, but an HTML error page
-    // is not a message — so send a fixed string rather than echoing a body that
-    // could carry anything.
+    // Not JSON. An HTML error page is not a message, so it is not echoed —
+    // but a short plain-text body usually is the reason, and discarding it
+    // left the KYC screen with nothing to say but a fixed string. Keep it when
+    // it is small enough to be a message rather than a document.
+    const plain = text.trim();
+    if (!response.ok && plain && plain.length <= 200 && !/^\s*</.test(plain)) {
+      throw new LinqError(plain, response.status);
+    }
     throw new LinqError(
       response.ok ? "Linq returned a response we could not read" : "Linq rejected the request",
       response.ok ? 502 : response.status,
@@ -126,11 +139,20 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
+    const body = parsed as Record<string, unknown> | null;
+    // Read the same shapes `linq/client.ts` does, plus the ones seen on these
+    // routes. A reason that arrives under a key nobody reads is a reason the
+    // user never gets: the KYC screen then falls back to guessing the likeliest
+    // cause, and tells someone to check a name when their NIN is the problem.
     const message =
-      (parsed as { message?: string; error?: string } | null)?.message ??
-      (parsed as { message?: string; error?: string } | null)?.error ??
+      firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
       "Linq rejected the request";
-    throw new LinqError(message, response.status);
+    // The machine-readable half. This client never parsed it, so every
+    // `code` the API layer forwards on an onramp or KYC route was undefined
+    // and the clients were left matching on prose — exactly what carrying a
+    // code exists to avoid.
+    const code = firstString(body?.["code"], body?.["errorCode"], body?.["error_code"]);
+    throw new LinqError(message, response.status, code);
   }
 
   return parsed as T;

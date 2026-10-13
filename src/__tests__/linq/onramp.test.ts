@@ -264,3 +264,72 @@ describe("getOnrampStatus", () => {
     expect(url).toContain('orderId=47ca0421');
   });
 });
+
+/**
+ * A rejection the user can act on.
+ *
+ * This client read only `message` and `error`, and threw the whole body away
+ * when it was not JSON — so a reason that arrived under any other key reached
+ * the KYC screen as the fixed string "Linq rejected the request". The screen
+ * then did the only thing left to it and guessed the likeliest cause, telling
+ * people to check the spelling of their name. It never parsed `code` either,
+ * so every code the API layer forwards on these routes was undefined and the
+ * clients were left matching on prose.
+ */
+describe("call() error parsing", () => {
+  const raw = (status: number, body: string) => ({
+    ok: false,
+    status,
+    text: async () => body,
+  });
+
+  it.each([
+    ["message", { message: "Identity could not be verified" }],
+    ["error", { error: "Identity could not be verified" }],
+    ["msg", { msg: "Identity could not be verified" }],
+    ["detail", { detail: "Identity could not be verified" }],
+    ["reason", { reason: "Identity could not be verified" }],
+  ])("reads the reason from `%s`", async (_key, body) => {
+    global.fetch = jest.fn().mockResolvedValue(raw(422, JSON.stringify(body))) as never;
+    await expect(submitCustomerKyc("veil_abc", "12345678901")).rejects.toThrow(
+      "Identity could not be verified",
+    );
+  });
+
+  it.each([["code"], ["errorCode"], ["error_code"]])(
+    "carries the machine-readable reason from `%s`",
+    async (key) => {
+      global.fetch = jest
+        .fn()
+        .mockResolvedValue(raw(409, JSON.stringify({ message: "no", [key]: "nin_already_used" }))) as never;
+      await expect(submitCustomerKyc("veil_abc", "12345678901")).rejects.toMatchObject({
+        code: "nin_already_used",
+      });
+    },
+  );
+
+  // The difference between "your NIN is spent" and "check your spelling".
+  it("keeps a short plain-text reason rather than replacing it", async () => {
+    global.fetch = jest.fn().mockResolvedValue(raw(409, "NIN already used")) as never;
+    await expect(submitCustomerKyc("veil_abc", "12345678901")).rejects.toThrow("NIN already used");
+  });
+
+  // An HTML error page is a document, not a message — echoing it would put a
+  // gateway's markup on a user's screen.
+  it("refuses to echo an HTML error page", async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(raw(502, "<html><body>502 Bad Gateway</body></html>")) as never;
+    await expect(submitCustomerKyc("veil_abc", "12345678901")).rejects.toThrow(
+      "Linq rejected the request",
+    );
+  });
+
+  it("falls back only when the body names no reason at all", async () => {
+    global.fetch = jest.fn().mockResolvedValue(raw(500, JSON.stringify({ ok: false }))) as never;
+    const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
+    expect(err).toBeInstanceOf(LinqError);
+    expect(err.message).toBe("Linq rejected the request");
+    expect(err.code).toBeUndefined();
+  });
+});
