@@ -325,6 +325,30 @@ describe("call() error parsing", () => {
     );
   });
 
+  // Three testers in a row met the bare fallback on a NIN check, which says
+  // only that something went wrong — and the screen then guessed a name
+  // mismatch each time. A code in the sentence is the difference between
+  // diagnosing the next one and asking them to try again.
+  it("puts the code in the message when there is no prose", async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(raw(422, JSON.stringify({ code: "nin_name_mismatch" }))) as never;
+    const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
+    expect(err.message).toBe("Linq rejected the request (nin_name_mismatch)");
+    expect(err.code).toBe("nin_name_mismatch");
+  });
+
+  // Prose still wins — it is written for a person, the code is not.
+  it("prefers the provider's own words over the code", async () => {
+    global.fetch = jest
+      .fn()
+      .mockResolvedValue(
+        raw(422, JSON.stringify({ message: "Name does not match NIN record", code: "nin_name_mismatch" })),
+      ) as never;
+    const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);
+    expect(err.message).toBe("Name does not match NIN record");
+  });
+
   it("falls back only when the body names no reason at all", async () => {
     global.fetch = jest.fn().mockResolvedValue(raw(500, JSON.stringify({ ok: false }))) as never;
     const err = await submitCustomerKyc("veil_abc", "12345678901").catch((e) => e);

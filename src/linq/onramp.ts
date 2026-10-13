@@ -144,14 +144,16 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     // routes. A reason that arrives under a key nobody reads is a reason the
     // user never gets: the KYC screen then falls back to guessing the likeliest
     // cause, and tells someone to check a name when their NIN is the problem.
+    const code = firstString(body?.["code"], body?.["errorCode"], body?.["error_code"]);
+    // The code rides in the message when there is no prose, because the prose
+    // is what reaches the user. Three testers in a row met the bare fallback
+    // "Linq rejected the request" on a NIN check, which says only that
+    // something went wrong and leaves the screen to guess the cause — it
+    // guessed a name mismatch each time. A code in the sentence is the
+    // difference between diagnosing the next one and asking them to try again.
     const message =
       firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
-      "Linq rejected the request";
-    // The machine-readable half. This client never parsed it, so every
-    // `code` the API layer forwards on an onramp or KYC route was undefined
-    // and the clients were left matching on prose — exactly what carrying a
-    // code exists to avoid.
-    const code = firstString(body?.["code"], body?.["errorCode"], body?.["error_code"]);
+      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
     throw new LinqError(message, response.status, code);
   }
 
