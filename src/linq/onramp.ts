@@ -72,6 +72,14 @@ type CallInit = {
   body?: unknown;
   auth?: boolean;
   deadline?: number;
+  /**
+   * Per-attempt ceiling, when this call is slower than most by nature.
+   *
+   * The default suits a lookup. A NIN check is not one: it goes out to NIMC
+   * and routinely takes longer than fifteen seconds, so capping it there makes
+   * us abandon an answer that was on its way.
+   */
+  timeoutMs?: number;
   /** Query parameters, appended and encoded. */
   query?: Record<string, string>;
 };
@@ -86,7 +94,7 @@ type CallInit = {
  * it failed on is how personal data ends up in a log aggregator.
  */
 async function call<T>(path: string, init: CallInit = {}): Promise<T> {
-  const { method = "GET", body, auth = true, deadline, query } = init;
+  const { method = "GET", body, auth = true, deadline, timeoutMs, query } = init;
 
   const url = new URL(path, BASE_URL);
   for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, v);
@@ -97,7 +105,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   }
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), Math.min(remaining, TIMEOUT_MS));
+  const timer = setTimeout(() => controller.abort(), Math.min(remaining, timeoutMs ?? TIMEOUT_MS));
 
   let response: Response;
   try {
@@ -129,6 +137,11 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     // left the KYC screen with nothing to say but a fixed string. Keep it when
     // it is small enough to be a message rather than a document.
     const plain = text.trim();
+    if (!response.ok) {
+      console.warn(
+        `[linq] ${response.status} from ${path}, non-JSON body: ${plain.slice(0, 500) || "(empty)"}`,
+      );
+    }
     if (!response.ok && plain && plain.length <= 200 && !/^\s*</.test(plain)) {
       throw new LinqError(plain, response.status);
     }
@@ -139,6 +152,15 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   }
 
   if (!response.ok) {
+    // Logged because the provider asked for the status and raw body of a
+    // failure and we had neither — three testers hit an unreadable error and
+    // all we could say was that something went wrong. The REQUEST is never
+    // logged: it carries the NIN, which is personal data under the NDPA and
+    // is deliberately unreachable after the call. Truncated, because an error
+    // body is not a place to find a bounded length.
+    console.warn(
+      `[linq] ${response.status} from ${path} — body: ${text.slice(0, 500) || "(empty)"}`,
+    );
     const body = parsed as Record<string, unknown> | null;
     // Read the same shapes `linq/client.ts` does, plus the ones seen on these
     // routes. A reason that arrives under a key nobody reads is a reason the
@@ -272,6 +294,12 @@ export function submitCustomerKyc(customerRef: string, nin: string): Promise<Cus
   return call<CustomerKycResult>("/b2b/customers/kyc", {
     method: "POST",
     body: { customerRef, nin },
+    // A NIN check reaches NIMC and is routinely slower than a lookup. At the
+    // default fifteen seconds we were abandoning answers that were on their
+    // way, and the provider's own reading of our empty error bodies is that
+    // the request is timing out before their response arrives. Still inside
+    // the clients' own 40s ceiling, so they never give up first.
+    timeoutMs: 30_000,
   });
 }
 
