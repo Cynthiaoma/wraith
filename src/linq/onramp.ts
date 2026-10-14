@@ -104,6 +104,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     throw new LinqError("Linq did not respond in time", 504);
   }
 
+  const startedAt = Date.now();
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Math.min(remaining, timeoutMs ?? TIMEOUT_MS));
 
@@ -119,9 +120,19 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch (err) {
+    // Logged for the same reason the non-2xx path is: without it a timeout
+    // leaves no trace at all, and "no log line" is indistinguishable from
+    // "the logging is not working" — which is exactly the dead end we hit
+    // looking for the first failure. The elapsed time is the useful part: it
+    // says whether we gave up or the connection did.
+    const waited = Date.now() - startedAt;
     if (err instanceof Error && err.name === "AbortError") {
+      console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
       throw new LinqError("Linq did not respond in time", 504);
     }
+    console.warn(
+      `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
+    );
     throw new LinqError("Could not reach Linq", 502);
   } finally {
     clearTimeout(timer);
