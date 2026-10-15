@@ -31,6 +31,15 @@ export class LinqError extends Error {
      * and non-JSON error bodies have none.
      */
     readonly code?: string,
+    /**
+     * Seconds to wait, from a `Retry-After` header on a 429.
+     *
+     * Read because a rate limit without a number is indistinguishable from an
+     * outage: a tester hit a 429 creating an order and the screen could only
+     * say "try again in a few seconds", which was a guess. The provider knows
+     * the answer and sends it; nothing was reading it.
+     */
+    readonly retryAfterSeconds?: number,
   ) {
     super(message);
     this.name = "LinqError";

@@ -85,6 +85,30 @@ type CallInit = {
 };
 
 /**
+ * `Retry-After`, in seconds, when the provider sent one.
+ *
+ * The header is either a count of seconds or an HTTP date; both are legal and
+ * both appear in the wild. A value that is neither, or is in the past, is no
+ * answer at all and is treated as absent rather than as zero — telling someone
+ * to retry immediately after a rate limit is how the limit gets deeper.
+ */
+function retryAfterSeconds(response: Response): number | undefined {
+  // `headers` is optional here on purpose: a real Response always has it, but
+  // the stubs in this repo's tests are plain objects, and a header lookup is
+  // not worth failing a request over.
+  const raw = response.headers?.get?.("retry-after");
+  if (!raw) return undefined;
+
+  const asSeconds = Number(raw.trim());
+  if (Number.isFinite(asSeconds)) return asSeconds > 0 ? Math.ceil(asSeconds) : undefined;
+
+  const asDate = Date.parse(raw);
+  if (!Number.isFinite(asDate)) return undefined;
+  const seconds = Math.ceil((asDate - Date.now()) / 1000);
+  return seconds > 0 ? seconds : undefined;
+}
+
+/**
  * One request. Returns typed data or throws {@link LinqError} carrying Linq's
  * own message, because their 400s name the actual problem — an unverified
  * customer, an unsupported coin — far better than anything we would invent.
@@ -138,6 +162,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     clearTimeout(timer);
   }
 
+
   const text = await response.text();
   let parsed: unknown;
   try {
@@ -154,7 +179,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
       );
     }
     if (!response.ok && plain && plain.length <= 200 && !/^\s*</.test(plain)) {
-      throw new LinqError(plain, response.status);
+      throw new LinqError(plain, response.status, undefined, retryAfterSeconds(response));
     }
     throw new LinqError(
       response.ok ? "Linq returned a response we could not read" : "Linq rejected the request",
@@ -187,7 +212,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     const message =
       firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
       (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
-    throw new LinqError(message, response.status, code);
+    throw new LinqError(message, response.status, code, retryAfterSeconds(response));
   }
 
   return parsed as T;
