@@ -74,9 +74,22 @@ function sendLinqError(res: Response, err: unknown): void {
     // matching on the prose in `error`, which is how a reworded provider
     // message turns into a user sent down the wrong branch. `error` stays
     // exactly as it was, so nothing that reads it today breaks.
+    // A 429 is not a failure the user can fix by reading a sentence, and the
+    // clients collapse every rate-limit message into one guess at how long to
+    // wait. `rate_limited` and the provider's own Retry-After replace the
+    // guess: a tester hit this creating an order while the rate reads beside
+    // it were succeeding, which is how we knew it was the provider's limit and
+    // not ours — but only after reading the source.
+    const rateLimited = err.status === 429;
+    if (rateLimited && err.retryAfterSeconds !== undefined) {
+      res.setHeader("Retry-After", String(err.retryAfterSeconds));
+    }
     res.status(err.status >= 500 ? 502 : err.status).json({
       error: err.message,
-      ...(err.code ? { code: err.code } : {}),
+      ...(err.code ? { code: err.code } : rateLimited ? { code: "rate_limited" } : {}),
+      ...(rateLimited && err.retryAfterSeconds !== undefined
+        ? { retryAfterSeconds: err.retryAfterSeconds }
+        : {}),
     });
     return;
   }

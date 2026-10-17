@@ -85,6 +85,30 @@ type CallInit = {
 };
 
 /**
+ * `Retry-After`, in seconds, when the provider sent one.
+ *
+ * The header is either a count of seconds or an HTTP date; both are legal and
+ * both appear in the wild. A value that is neither, or is in the past, is no
+ * answer at all and is treated as absent rather than as zero — telling someone
+ * to retry immediately after a rate limit is how the limit gets deeper.
+ */
+function retryAfterSeconds(response: Response): number | undefined {
+  // `headers` is optional here on purpose: a real Response always has it, but
+  // the stubs in this repo's tests are plain objects, and a header lookup is
+  // not worth failing a request over.
+  const raw = response.headers?.get?.("retry-after");
+  if (!raw) return undefined;
+
+  const asSeconds = Number(raw.trim());
+  if (Number.isFinite(asSeconds)) return asSeconds > 0 ? Math.ceil(asSeconds) : undefined;
+
+  const asDate = Date.parse(raw);
+  if (!Number.isFinite(asDate)) return undefined;
+  const seconds = Math.ceil((asDate - Date.now()) / 1000);
+  return seconds > 0 ? seconds : undefined;
+}
+
+/**
  * One request. Returns typed data or throws {@link LinqError} carrying Linq's
  * own message, because their 400s name the actual problem — an unverified
  * customer, an unsupported coin — far better than anything we would invent.
@@ -138,6 +162,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     clearTimeout(timer);
   }
 
+
   const text = await response.text();
   let parsed: unknown;
   try {
@@ -154,7 +179,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
       );
     }
     if (!response.ok && plain && plain.length <= 200 && !/^\s*</.test(plain)) {
-      throw new LinqError(plain, response.status);
+      throw new LinqError(plain, response.status, undefined, retryAfterSeconds(response));
     }
     throw new LinqError(
       response.ok ? "Linq returned a response we could not read" : "Linq rejected the request",
@@ -187,7 +212,19 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     const message =
       firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
       (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
-    throw new LinqError(message, response.status, code);
+    // Linq names the reference an already-registered identity belongs to, in a
+    // `customerRef` field beside the code. Reading it is what lets
+    // `provisionCustomer` adopt the existing reference instead of stranding the
+    // person under a second one; the only other way to it is parsing the prose
+    // `This email is already registered under customerRef "veil_…"`.
+    const existingCustomerRef = firstString(body?.["customerRef"], body?.["customer_ref"]);
+    throw new LinqError(
+      message,
+      response.status,
+      code,
+      retryAfterSeconds(response),
+      existingCustomerRef,
+    );
   }
 
   return parsed as T;
@@ -241,6 +278,15 @@ export interface LinqCustomer {
    * {@link provisionCustomer} on dropped responses.
    */
   created: boolean;
+  /**
+   * True when `customerRef` is **not** the one that was asked for.
+   *
+   * Linq refused the requested reference because this person's email is
+   * already registered under a different one, and named it. The caller must
+   * persist the reference in this result and use it from now on — see the note
+   * on {@link provisionCustomer}.
+   */
+  reusedExistingRef?: boolean;
 }
 
 /**
@@ -252,7 +298,23 @@ export interface LinqCustomer {
  * customers for one person. That rests on Linq's behaviour, which the fake
  * provider encodes and `__tests__/linq/idempotency.test.ts` holds us to.
  *
- * Two things it does NOT promise:
+ * **The reference that comes back is not always the one that went in.** An
+ * email already registered under another reference is refused with
+ * `email_already_in_use`, and Linq names the existing reference in the error.
+ * We adopt it and return it rather than failing, because the alternative is
+ * what locked testers out: the person's identity stays bound to the first
+ * reference, so every later KYC and order under a second one is refused, and
+ * nothing on our side could see why.
+ *
+ * This is the same shape as the NIN case, where an identity is already bound to
+ * a reference that is not the one we are using.
+ *
+ * Callers **must** persist `customerRef` from the result and stop using the one
+ * they sent. A reference that drifts between calls is a permanent lockout for
+ * that person — `reusedExistingRef` is set so a caller can tell this happened
+ * rather than having to compare strings.
+ *
+ * Two further things it does NOT promise:
  *  - The details you sent are stored. The key is the reference alone, and an
  *    existing customer comes back *unchanged* — provisioning again with a
  *    corrected email or phone silently keeps the old one.
@@ -260,13 +322,37 @@ export interface LinqCustomer {
  *    the internal retry finds the customer the first attempt made, and answers
  *    `created: false` for a person who did not exist a second earlier.
  */
-export function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
+export async function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
-  return retryOnProviderFailure(
-    () => call<LinqCustomer>("/b2b/customers", { method: "POST", body: params, deadline }),
-    1_500,
-    deadline,
-  );
+  try {
+    return await retryOnProviderFailure(
+      () => call<LinqCustomer>("/b2b/customers", { method: "POST", body: params, deadline }),
+      1_500,
+      deadline,
+    );
+  } catch (err) {
+    const existing = err instanceof LinqError ? err.existingCustomerRef : undefined;
+    // Only adopt a reference Linq actually named. Without one there is nothing
+    // to fall back to, and inventing a reference is how this went wrong before.
+    if (!existing) throw err;
+
+    // Already ours and unchanged: nothing drifted, so this is the ordinary
+    // idempotent case wearing an error's clothes.
+    if (existing === params.customerRef) {
+      return { customerRef: existing, verified: false, created: false };
+    }
+
+    // Ask Linq what state that reference is actually in rather than assuming
+    // it is unverified — reporting a verified customer as unverified would send
+    // them back through a rate-limited NIN check they do not need.
+    const status = await getCustomerStatus(existing).catch(() => null);
+    return {
+      customerRef: existing,
+      verified: status?.verified ?? false,
+      created: false,
+      reusedExistingRef: true,
+    };
+  }
 }
 
 export interface CustomerStatus {
