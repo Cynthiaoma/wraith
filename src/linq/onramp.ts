@@ -212,7 +212,19 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
     const message =
       firstString(body?.["message"], body?.["error"], body?.["msg"], body?.["detail"], body?.["reason"]) ??
       (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
-    throw new LinqError(message, response.status, code, retryAfterSeconds(response));
+    // Linq names the reference an already-registered identity belongs to, in a
+    // `customerRef` field beside the code. Reading it is what lets
+    // `provisionCustomer` adopt the existing reference instead of stranding the
+    // person under a second one; the only other way to it is parsing the prose
+    // `This email is already registered under customerRef "veil_…"`.
+    const existingCustomerRef = firstString(body?.["customerRef"], body?.["customer_ref"]);
+    throw new LinqError(
+      message,
+      response.status,
+      code,
+      retryAfterSeconds(response),
+      existingCustomerRef,
+    );
   }
 
   return parsed as T;
@@ -262,6 +274,15 @@ export interface LinqCustomer {
   verified: boolean;
   /** False when the customer already existed — provisioning is idempotent. */
   created: boolean;
+  /**
+   * True when `customerRef` is **not** the one that was asked for.
+   *
+   * Linq refused the requested reference because this person's email is
+   * already registered under a different one, and named it. The caller must
+   * persist the reference in this result and use it from now on — see the note
+   * on {@link provisionCustomer}.
+   */
+  reusedExistingRef?: boolean;
 }
 
 /**
@@ -271,14 +292,54 @@ export interface LinqCustomer {
  * customer unchanged with `created: false` rather than erroring or duplicating,
  * which means a client that retries after a dropped response cannot create two
  * customers for one person.
+ *
+ * **The reference that comes back is not always the one that went in.** An
+ * email already registered under another reference is refused with
+ * `email_already_in_use`, and Linq names the existing reference in the error.
+ * We adopt it and return it rather than failing, because the alternative is
+ * what locked testers out: the person's identity stays bound to the first
+ * reference, so every later KYC and order under a second one is refused, and
+ * nothing on our side could see why.
+ *
+ * This is the same shape as the NIN case, where an identity is already bound to
+ * a reference that is not the one we are using.
+ *
+ * Callers **must** persist `customerRef` from the result and stop using the one
+ * they sent. A reference that drifts between calls is a permanent lockout for
+ * that person — `reusedExistingRef` is set so a caller can tell this happened
+ * rather than having to compare strings.
  */
-export function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
+export async function provisionCustomer(params: ProvisionCustomerParams): Promise<LinqCustomer> {
   const deadline = Date.now() + TOTAL_BUDGET_MS;
-  return retryOnProviderFailure(
-    () => call<LinqCustomer>("/b2b/customers", { method: "POST", body: params, deadline }),
-    1_500,
-    deadline,
-  );
+  try {
+    return await retryOnProviderFailure(
+      () => call<LinqCustomer>("/b2b/customers", { method: "POST", body: params, deadline }),
+      1_500,
+      deadline,
+    );
+  } catch (err) {
+    const existing = err instanceof LinqError ? err.existingCustomerRef : undefined;
+    // Only adopt a reference Linq actually named. Without one there is nothing
+    // to fall back to, and inventing a reference is how this went wrong before.
+    if (!existing) throw err;
+
+    // Already ours and unchanged: nothing drifted, so this is the ordinary
+    // idempotent case wearing an error's clothes.
+    if (existing === params.customerRef) {
+      return { customerRef: existing, verified: false, created: false };
+    }
+
+    // Ask Linq what state that reference is actually in rather than assuming
+    // it is unverified — reporting a verified customer as unverified would send
+    // them back through a rate-limited NIN check they do not need.
+    const status = await getCustomerStatus(existing).catch(() => null);
+    return {
+      customerRef: existing,
+      verified: status?.verified ?? false,
+      created: false,
+      reusedExistingRef: true,
+    };
+  }
 }
 
 export interface CustomerStatus {

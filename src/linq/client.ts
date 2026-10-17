@@ -40,6 +40,21 @@ export class LinqError extends Error {
      * the answer and sends it; nothing was reading it.
      */
     readonly retryAfterSeconds?: number,
+    /**
+     * The `customerRef` Linq says this person already has.
+     *
+     * Sent on `email_already_in_use` (and on the NIN equivalent): the identity
+     * is already bound to a reference, and Linq returns which one rather than
+     * only refusing. Carried because the alternative is parsing it out of the
+     * prose — the message is literally
+     * `This email is already registered under customerRef "veil_…"`.
+     *
+     * Reusing the reference Linq names is the whole fix. Provisioning a second
+     * customer for the same person is what locks them out: their identity stays
+     * bound to the first reference and every later call made under the new one
+     * is refused.
+     */
+    readonly existingCustomerRef?: string,
   ) {
     super(message);
     this.name = "LinqError";
@@ -155,7 +170,12 @@ async function callOnce<T>(
       const code = typeof rawCode === "string" && rawCode ? rawCode : undefined;
       const header = res.headers?.get?.("retry-after");
       const seconds = header == null ? Number.NaN : Number(header);
-      throw Object.assign(new LinqError(message, res.status, code), {
+      // Linq names the reference an already-registered identity belongs to.
+      // Dropping it here is what forced the prose to be parsed downstream.
+      const rawExisting = (parsed as { customerRef?: unknown })?.customerRef;
+      const existingCustomerRef =
+        typeof rawExisting === "string" && rawExisting ? rawExisting : undefined;
+      throw Object.assign(new LinqError(message, res.status, code, undefined, existingCustomerRef), {
         retryAfterMs: Number.isFinite(seconds)
           ? Math.min(Math.max(0, seconds) * 1_000, MAX_RETRY_DELAY_MS)
           : undefined,
