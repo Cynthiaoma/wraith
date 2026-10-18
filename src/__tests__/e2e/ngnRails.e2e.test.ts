@@ -265,7 +265,7 @@ describe("full onramp happy path", () => {
 // using the documented codes."
 
 describe("failure at provision step", () => {
-  it("returns email_already_in_use when the email belongs to another ref", async () => {
+  it("adopts the existing reference when email belongs to another ref", async () => {
     const app = makeApp();
     // Register the email under a different ref first.
     fakeLinq.seedVerifiedCustomer("veil_original", "ada@conflict.example.com");
@@ -279,9 +279,11 @@ describe("failure at provision step", () => {
         phone: "080",
       }),
     );
-    // The Linq error is forwarded; `veil_original` is the reference to adopt.
-    expect(res.status).toBe(409);
-    expect(res.body.code).toBe("email_already_in_use");
+    // provisionCustomer catches the 409 and adopts the existing ref —
+    // the user is not told it failed, they're told which ref to use.
+    expect(res.status).toBe(200);
+    expect(res.body.customerRef).toBe("veil_original");
+    expect(res.body.reusedExistingRef).toBe(true);
   });
 
   it("returns a 429 with Retry-After when Linq rate-limits provisioning", async () => {
