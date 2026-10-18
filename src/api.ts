@@ -506,7 +506,7 @@ export function createApp(): express.Application {
       );
       const byNetwork = Object.fromEntries(perNetwork);
 
-      if (rpcSuccess && latestLedger !== null) {
+      if (rpcSuccess && latestLedger !== null && dependencies.railsUsable) {
         res.json({
           ok: true,
           status: "healthy",
@@ -537,8 +537,8 @@ export function createApp(): express.Application {
           as_of_ledger: lastIndexedLedger ?? undefined,
           lastIndexedLedger,
           last_indexed_ledger: lastIndexedLedger,
-          latestLedger: null,
-          lagLedgers: null,
+          latestLedger: rpcSuccess ? latestLedger : null,
+          lagLedgers: rpcSuccess && latestLedger !== null ? latestLedger - (lastIndexedLedger ?? latestLedger) : null,
           ...stats,
           // Also reported when degraded — with two loops, "RPC is down" is
           // usually true of one chain only, and the top-level nulls above

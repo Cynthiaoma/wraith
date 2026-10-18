@@ -500,7 +500,6 @@
     "/status": {
       "get": {
         "summary": "Indexer status",
-        "description": "Reports whether the service itself is up and whether the rails the product depends on are usable. The `dependencies` section reports the last observed outcome of each provider endpoint the product needs, with the time it was observed. A failing dependency does not make the service unhealthy — it is reported as `degraded`, because the indexer keeps indexing and the API keeps answering while the rails are down. The `dependencies` section is refreshed on a bounded interval: at most `dependencyStalenessSeconds` (see `dependencies.maxAgeSeconds`) may pass before a stale entry is reported as `unknown`.",
         "parameters": [
           {
             "schema": {
@@ -534,14 +533,6 @@
                         true
                       ]
                     },
-                    "status": {
-                      "type": "string",
-                      "enum": [
-                        "healthy",
-                        "degraded"
-                      ],
-                      "description": "`healthy` when every dependency the product needs is usable; `degraded` when the service is up but one or more dependencies are failing or unknown. A failing dependency never makes the service unhealthy — the indexer and the API keep running."
-                    },
                     "network": {
                       "type": "string",
                       "enum": [
@@ -554,12 +545,10 @@
                       "nullable": true
                     },
                     "latestLedger": {
-                      "type": "integer",
-                      "nullable": true
+                      "type": "integer"
                     },
                     "lagLedgers": {
-                      "type": "integer",
-                      "nullable": true
+                      "type": "integer"
                     },
                     "startedAt": {
                       "type": "string",
@@ -571,114 +560,71 @@
                     "totalIndexed": {
                       "type": "integer"
                     },
-                    "networks": {
-                      "type": "object",
-                      "additionalProperties": {
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "healthy",
+                        "degraded"
+                      ]
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "items": {
                         "type": "object",
                         "properties": {
-                          "lastIndexedLedger": {
-                            "type": "integer",
-                            "nullable": true
-                          },
-                          "latestLedger": {
-                            "type": "integer",
-                            "nullable": true
-                          },
-                          "lagLedgers": {
-                            "type": "integer",
-                            "nullable": true
-                          },
-                          "running": {
-                            "type": "boolean"
-                          },
-                          "reason": {
+                          "name": {
                             "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "degraded",
+                              "down",
+                              "unknown"
+                            ]
+                          },
+                          "lastCheckedAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "lastOkAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "latencyMs": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "detail": {
+                            "type": "string",
+                            "nullable": true
                           }
                         },
                         "required": [
-                          "lastIndexedLedger",
-                          "latestLedger",
-                          "lagLedgers",
-                          "running"
-                        ],
-                        "additionalProperties": {
-                          "nullable": true
-                        }
+                          "name",
+                          "status",
+                          "lastCheckedAt",
+                          "lastOkAt",
+                          "latencyMs",
+                          "detail"
+                        ]
                       }
                     }
                   },
-                    "dependencies": {
-                      "type": "object",
-                      "description": "Last observed outcome of each provider endpoint the product needs. Nothing here is probed on request: entries are recorded by real calls and by a cheap, side-effect-free poll of the unauthenticated rate endpoint. A KYC probe is deliberately not invented, because a KYC call moves real personal data.",
-                      "properties": {
-                        "maxAgeSeconds": {
-                          "type": "integer",
-                          "description": "Bound on staleness. An entry older than this is reported as `unknown` rather than as its last known outcome."
-                        },
-                        "checks": {
-                          "type": "object",
-                          "additionalProperties": {
-                            "type": "object",
-                            "properties": {
-                              "name": {
-                                "type": "string",
-                                "description": "Provider endpoint the product depends on."
-                              },
-                              "ok": {
-                                "type": "boolean",
-                                "nullable": true,
-                                "description": "Last observed outcome. `null` when nothing has been observed within `maxAgeSeconds`."
-                              },
-                              "status": {
-                                "type": "string",
-                                "enum": [
-                                  "up",
-                                  "down",
-                                  "unknown"
-                                ],
-                                "description": "`up` when the last observation succeeded, `down` when it failed, `unknown` when the last observation is older than `maxAgeSeconds` or has never happened."
-                              },
-                              "observedAt": {
-                                "type": "string",
-                                "nullable": true,
-                                "format": "date-time",
-                                "description": "When the outcome was observed. `null` when never observed."
-                              },
-                              "ageSeconds": {
-                                "type": "integer",
-                                "nullable": true,
-                                "description": "Seconds since `observedAt`. `null` when never observed."
-                              },
-                              "detail": {
-                                "type": "string",
-                                "nullable": true,
-                                "description": "Short, non-sensitive reason for the last outcome (for example an HTTP status or a transport error). Never contains personal data."
-                              }
-                            },
-                            "required": [
-                              "name",
-                              "ok",
-                              "status",
-                              "observedAt",
-                              "ageSeconds"
-                            ]
-                          }
-                        }
-                      },
-                      "required": [
-                        "maxAgeSeconds",
-                        "checks"
-                      ]
-                    }
                   "required": [
                     "ok",
                     "lastIndexedLedger",
                     "latestLedger",
-                    "lagLedgers"
-                  ],
-                  "additionalProperties": {
-                    "nullable": true
-                  }
+                    "lagLedgers",
+                    "startedAt",
+                    "uptimeSeconds",
+                    "totalIndexed",
+                    "status",
+                    "dependencies"
+                  ]
                 }
               }
             }
@@ -4777,93 +4723,6 @@
                   },
                   "required": [
                     "error"
-                  ]
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/fees": {
-      "get": {
-        "summary": "Veil platform fee",
-        "description": "What the wallet should charge on a send, and where to pay it, per asset. The fee is collected on-chain in the same transaction as the send; this only tells the client the amount, so it can change without shipping an app. Unauthenticated and served with `Cache-Control: no-store`, because a stale fee is one the user was shown but did not agree to. `enabled: false` means no fee is configured today.",
-        "parameters": [
-          {
-            "schema": {
-              "type": "string",
-              "nullable": true,
-              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
-              "example": "25"
-            },
-            "required": false,
-            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
-            "name": "amount",
-            "in": "query"
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "enabled": {
-                      "type": "boolean",
-                      "description": "False when no fee is configured, so a client can tell a deliberate waiver from a backend too old to know about fees."
-                    },
-                    "fees": {
-                      "type": "object",
-                      "additionalProperties": {
-                        "type": "object",
-                        "properties": {
-                          "amount": {
-                            "type": "string",
-                            "description": "What to charge, in whole units of the fee asset, as a decimal string.",
-                            "example": "0.25"
-                          },
-                          "assetCode": {
-                            "type": "string",
-                            "example": "USDC"
-                          },
-                          "assetIssuer": {
-                            "type": "string",
-                            "nullable": true,
-                            "description": "Null for native XLM."
-                          },
-                          "destination": {
-                            "type": "string",
-                            "description": "The classic account the fee is paid to."
-                          },
-                          "percent": {
-                            "type": "string",
-                            "description": "Percent of the sent amount, when the fee scales. Absent when it is flat."
-                          },
-                          "min": {
-                            "type": "string",
-                            "description": "Floor; present only alongside percent."
-                          },
-                          "max": {
-                            "type": "string",
-                            "description": "Cap; present only alongside percent."
-                          }
-                        },
-                        "required": [
-                          "amount",
-                          "assetCode",
-                          "assetIssuer",
-                          "destination"
-                        ]
-                      },
-                      "description": "Keyed by asset code. Always charged in the asset being sent."
-                    }
-                  },
-                  "required": [
-                    "enabled",
-                    "fees"
                   ]
                 }
               }
