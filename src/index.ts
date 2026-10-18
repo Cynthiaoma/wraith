@@ -39,7 +39,7 @@ async function main() {
   //
   // Additive changes — a new table, a new nullable column — still apply on
   // their own. Anything destructive now fails loudly here instead.
-  logger.info({ event: "schema.converge.start", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+  logger.info("schema.converge.start", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
   const first = pushSchema();
   if (!first.ok) {
     // `--accept-data-loss` consents to two very different things at once, and
@@ -56,22 +56,22 @@ async function main() {
     // unique constraint, consent and retry. If even one is anything else,
     // refuse exactly as before.
     if (onlyAddsUniqueConstraints(first.output)) {
-      logger.warn({ event: "schema.converge.unique_constraints_only", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+      logger.warn("schema.converge.unique_constraints_only", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
       const retry = pushSchema("--accept-data-loss");
       if (!retry.ok) {
-        logger.error({ event: "schema.converge.constraint_failed", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+        logger.error("schema.converge.constraint_failed", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
         process.exit(1);
       }
     } else {
-      logger.error({ event: "schema.converge.refused_destructive", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+      logger.error("schema.converge.refused_destructive", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
       process.exit(1);
     }
   }
-  logger.info({ event: "schema.converge.ready", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+  logger.info("schema.converge.ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
 
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   const shutdown = async (signal: string) => {
-    logger.info({ event: "shutdown.received", route: "startup", status: 0, durationMs: 0, requestId: bootId, signal });
+    logger.info("shutdown.received", { route: "startup", status: 0, durationMs: 0, requestId: bootId, signal });
     await prisma.$disconnect();
     process.exit(0);
   };
@@ -89,9 +89,9 @@ async function main() {
   attachGraphQLSubscriptions(server);
 
   server.listen(PORT, () => {
-    logger.info({ event: "server.listen", route: "startup", status: 0, durationMs: 0, requestId: bootId, port: PORT });
-    logger.info({ event: "server.ws_ready", route: "startup", status: 0, durationMs: 0, requestId: bootId, path: "/subscribe/:address" });
-    logger.info({ event: "server.graphql_ready", route: "startup", status: 0, durationMs: 0, requestId: bootId, path: SUBSCRIPTIONS_PATH });
+    logger.info("server.listen", { route: "startup", status: 0, durationMs: 0, requestId: bootId, port: PORT });
+    logger.info("server.ws_ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId, path: "/subscribe/:address" });
+    logger.info("server.graphql_ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId, path: SUBSCRIPTIONS_PATH });
   });
 
   // ── Start webhook worker ───────────────────────────────────────────────────
@@ -114,7 +114,7 @@ async function main() {
   // which exercises the HTTP surface only. Without this guard the indexer throws
   // on the missing RPC endpoint and takes the whole process (and API) down.
   if (process.env.SKIP_INDEXER === "true") {
-    logger.info({ event: "indexer.skipped", route: "startup", status: 0, durationMs: 0, requestId: bootId });
+    logger.info("indexer.skipped", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
   } else {
     // One loop per enabled network (NETWORKS env; defaults to STELLAR_NETWORK).
     // Each loop restarts itself on crash rather than taking the process down —
