@@ -5,9 +5,11 @@ import { jsonApiMiddleware } from "./middleware/jsonapi";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
-import { getIndexerStats, getAllIndexerStats, runningNetworks } from "./indexer";
+import { getIndexerStats, getAllIndexerStats, runningNetworks, isIndexerRunning, isIndexerStopped, getIndexerUnstartedReason } from "./indexer";
 import { currentNetwork, enabledNetworks, type Network } from "./network";
 import { createAccountsRouter } from "./api/accounts";
+import { createCandlesRouter } from "./api/candles";
+import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
 import { createWebhooksRouter } from "./api/webhooks";
 import { createLinqWebhookRouter } from "./api/linqWebhook";
 import { createOfframpRouter } from "./api/offramp";
@@ -32,6 +34,7 @@ import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
 import { toDisplayAmount } from "./amount";
+import { HttpError, newCorrelationId } from "./utils/errors";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
 // Keyed by network (#163): one cache entry would let a healthy testnet RPC
@@ -219,10 +222,17 @@ export function createApp(): express.Application {
 
     try {
       const net = requestNetwork(req);
+      const indexerStopped =
+        typeof isIndexerStopped === "function"
+          ? isIndexerStopped(net)
+          : false;
       const rpcHealthy = await checkRpcHealth(net);
-      if (!rpcHealthy) {
+      if (indexerStopped || !rpcHealthy) {
         const lastIndexed = await getLastIndexedLedger(net).catch(() => null);
         res.setHeader("X-Data-Stale", "true");
+        if (indexerStopped) {
+          res.setHeader("X-Indexer-Running", "false");
+        }
         if (lastIndexed !== null) {
           res.setHeader("X-As-Of-Ledger", String(lastIndexed));
         }
@@ -232,6 +242,9 @@ export function createApp(): express.Application {
           if (body && typeof body === "object" && !Array.isArray(body) && body.error === undefined) {
             if (body.stale === undefined) {
               body.stale = true;
+            }
+            if (body.indexer_running === undefined && indexerStopped) {
+              body.indexer_running = false;
             }
             if (body.as_of_ledger === undefined && lastIndexed !== null) {
               body.as_of_ledger = lastIndexed;
@@ -248,6 +261,9 @@ export function createApp(): express.Application {
 
   // ─── Accounts routes ─────────────────────────────────────────────────────
   app.use("/accounts", createAccountsRouter());
+  if (getOhlcRefreshIntervalMs() !== undefined) {
+    app.use("/candles", createCandlesRouter());
+  }
 
   // ─── Webhook subscription management ─────────────────────────────────────
   app.use("/webhooks", createWebhooksRouter());
@@ -459,8 +475,7 @@ export function createApp(): express.Application {
       // were so existing consumers are unaffected; this reports each loop
       // separately, which is the only way to see one chain falling behind
       // while the other is healthy.
-      const active = runningNetworks();
-      const networks: Network[] = active.length > 0 ? active : enabledNetworks();
+      const networks = enabledNetworks();
       const loopStats = getAllIndexerStats();
       const perNetwork = await Promise.all(
         networks.map(async (net) => {
@@ -471,6 +486,14 @@ export function createApp(): express.Application {
           const indexedLedger = indexed.status === "fulfilled" ? indexed.value : null;
           const tipLedger =
             tip.status === "fulfilled" && typeof tip.value === "number" ? tip.value : null;
+          const isRunning =
+            typeof isIndexerRunning === "function"
+              ? isIndexerRunning(net)
+              : (loopStats[net] !== undefined || runningNetworks().includes(net));
+          const unstartedReason =
+            !isRunning && typeof getIndexerUnstartedReason === "function"
+              ? getIndexerUnstartedReason(net)
+              : undefined;
           return [
             net,
             {
@@ -478,9 +501,8 @@ export function createApp(): express.Application {
               latestLedger: tipLedger,
               lagLedgers:
                 tipLedger !== null ? tipLedger - (indexedLedger ?? tipLedger) : null,
-              // A loop that has not started reports no stats rather than zeroes
-              // pretending to be progress.
-              running: loopStats[net] !== undefined,
+              running: isRunning,
+              ...(unstartedReason ? { reason: unstartedReason } : {}),
               ...(loopStats[net] ?? {}),
             },
           ] as const;
@@ -541,9 +563,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [...] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [...] }
    */
   app.get(
     "/transfers/incoming/:address",
@@ -682,9 +705,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [{ ...fields, direction }] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [{ ...fields, direction }] }
    */
   app.get(
     "/transfers/address/:address",
@@ -989,9 +1013,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper ledger bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [...] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [...] }
    */
   app.get(
     "/nfts/transfers",
@@ -1087,9 +1112,24 @@ export function createApp(): express.Application {
   });
 
   // ─── Global error handler ────────────────────────────────────────────────
-  app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-    console.error("[api] Unhandled error:", err);
-    res.status(500).json({ error: err.message ?? "Internal server error" });
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    // A deliberately-thrown HttpError carries a message written for the caller,
+    // so it keeps its own status and text.
+    if (err instanceof HttpError) {
+      return res.status(err.status).json({ error: err.message });
+    }
+
+    // Anything else is unhandled, and its message is not ours to show. This
+    // handler used to answer `err.message` verbatim, which is how a Postgres
+    // connection string reached callers through a raw driver error. The caller
+    // gets a correlation id; the detail stays in the log.
+    const correlationId = newCorrelationId();
+    console.error(`[api] Unhandled error (${correlationId}):`, err);
+
+    return res.status(500).json({
+      error: "Internal server error",
+      correlationId,
+    });
   });
 
   return app;

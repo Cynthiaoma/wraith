@@ -215,12 +215,24 @@ export const statusResponseSchema = z.object({
   /** The network the top-level fields describe; `networks` reports every loop. */
   network: z.enum(["testnet", "mainnet"]).optional(),
   lastIndexedLedger: z.number().int().nullable(),
-  latestLedger: z.number().int(),
-  lagLedgers: z.number().int(),
-  startedAt: z.string().datetime({ offset: true }),
-  uptimeSeconds: z.number().int(),
-  totalIndexed: z.number().int(),
-});
+  latestLedger: z.number().int().nullable(),
+  lagLedgers: z.number().int().nullable(),
+  startedAt: z.string().datetime({ offset: true }).optional(),
+  uptimeSeconds: z.number().int().optional(),
+  totalIndexed: z.number().int().optional(),
+  networks: z
+    .record(
+      z.string(),
+      z.object({
+        lastIndexedLedger: z.number().int().nullable(),
+        latestLedger: z.number().int().nullable(),
+        lagLedgers: z.number().int().nullable(),
+        running: z.boolean(),
+        reason: z.string().optional(),
+      }).passthrough()
+    )
+    .optional(),
+}).passthrough();
 
 export const transferSchema = z.object({
   id: z.number().int(),
@@ -635,10 +647,38 @@ export const linqWebhookAckResponseSchema = z.object({
 
 // ─── /offramp/* — cash-out surface (internal) ───────────────────────────────
 
+/**
+ * `available` is always true on a 200; the answer a client gates on is the
+ * status. The body exists so a redirect or a proxy's error page cannot be read
+ * as cash-out being up by a caller that only looked at the status code.
+ */
+export const offrampAvailabilityResponseSchema = z.object({
+  available: z.literal(true),
+});
+
+export const offrampRateQuerySchema = z
+  .object({
+    /**
+     * Which asset to price. Omitted is served as `usdc` and logged — see the
+     * rollout note in `api/offramp.ts`; omitting it will 400 once the installed
+     * clients send a coin.
+     */
+    coin: z.enum(["xlm", "usdc"]).optional().openapi({
+      description:
+        "Asset to price. Send it: without one the answer is priced for `usdc`, which is naira per dollar and wrong for every other asset by that asset's price. Omitting it is deprecated and will be refused once the installed wallet builds ask for a coin; a response always names the coin it was priced for.",
+      example: "usdc",
+    }),
+  })
+  .passthrough();
+
 export const offrampRateResponseSchema = z.object({
-  rate: z.number(),
-  currency: z.string(),
-  coin: z.string(),
+  coin: z.enum(["xlm", "usdc"]).openapi({
+    description:
+      "The asset `rate` is quoted per unit of. Always present, including for a request that named none — which is priced as `usdc`.",
+  }),
+  rate: z.number().openapi({
+    description: "Naira per one unit of the requested coin, not naira per dollar.",
+  }),
   /** Always true: the binding rate is the one locked into an order at creation. */
   indicative: z.literal(true),
 });
@@ -802,4 +842,40 @@ export const feeReportResponseSchema = z.object({
     z.string(),
     z.object({ firstSeenAt: z.string(), policy: feePolicySchema }),
   ),
+});
+
+// ─── GET /fees ──────────────────────────────────────────────────────────────
+
+export const feesQuerySchema = z.object({
+  amount: optionalQueryString(
+    "The amount being sent, in whole units of the asset. When given and a percentage " +
+      "fee is configured, each fee is computed for it; without it each fee is the " +
+      "floor. Optional because shipped clients predate it.",
+  ).openapi({ example: "25" }),
+});
+
+const platformFeeSchema = z.object({
+  amount: z.string().openapi({
+    description: "What to charge, in whole units of the fee asset, as a decimal string.",
+    example: "0.25",
+  }),
+  assetCode: z.string().openapi({ example: "USDC" }),
+  assetIssuer: z.string().nullable().openapi({ description: "Null for native XLM." }),
+  destination: z.string().openapi({ description: "The classic account the fee is paid to." }),
+  percent: z.string().optional().openapi({
+    description: "Percent of the sent amount, when the fee scales. Absent when it is flat.",
+  }),
+  min: z.string().optional().openapi({ description: "Floor; present only alongside percent." }),
+  max: z.string().optional().openapi({ description: "Cap; present only alongside percent." }),
+});
+
+export const feesResponseSchema = z.object({
+  enabled: z.boolean().openapi({
+    description:
+      "False when no fee is configured, so a client can tell a deliberate waiver " +
+      "from a backend too old to know about fees.",
+  }),
+  fees: z.record(z.string(), platformFeeSchema).openapi({
+    description: "Keyed by asset code. Always charged in the asset being sent.",
+  }),
 });

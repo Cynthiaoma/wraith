@@ -244,8 +244,11 @@ export function __clearNgnRateCache(): void {
  * Linq gives naira per dollar; this turns it into naira per coin. Every naira
  * amount on both rails is denominated this way, so the conversion happens in
  * exactly one place and the rate we quote is the rate we send Linq.
+ *
+ * Exported so the offramp rate endpoint can reuse the same price path rather
+ * than opening a second route to the provider.
  */
-async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
+export async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
   const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
   const rate = ngnPerUsd * usd;
   if (!Number.isFinite(rate) || rate <= 0) {
@@ -266,6 +269,29 @@ function createLookupLimiter(): RateLimitRequestHandler {
 }
 
 const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
+
+/**
+ * Coins the **onramp** may deliver. XLM only, for now.
+ *
+ * Linq told us on 2026-10-19 that they hold liquidity to provision XLM and not
+ * USDC. The onramp is the one direction where that matters: the customer pays
+ * naira and *Linq* delivers the crypto, so a coin they cannot source is an
+ * order that takes real money and cannot be filled.
+ *
+ * Only order creation is gated. `GET /ngn/onramp/rate` deliberately still
+ * quotes both, because a quote moves no money and installed APKs probe it with
+ * `coin=usdc` to decide whether to show the naira entry point at all —
+ * refusing it there would not block a USDC purchase, it would hide the whole
+ * naira feature from every user who already has the app.
+ *
+ * The other two rails are unaffected and also still use `COINS`:
+ *   - the offramp sends crypto *to* Linq, so their inventory is irrelevant;
+ *   - a bill is funded from the user's own balance, not from Linq's.
+ *
+ * This is a provider-inventory limit, not a protocol one. When they can source
+ * USDC, delete this map and point the order route back at `COINS`.
+ */
+const ONRAMP_COINS: Record<string, OnrampCoin> = { xlm: "xlm" };
 const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
 
 /** A classic `G…` account, which is what Linq pays to and refunds to. */
@@ -469,9 +495,15 @@ export function createNgnRouter(
     // The crypto is delivered here, so it must be an address Linq can pay.
     if (rejectContractAddress(res, walletAddress, "walletAddress")) return;
 
-    const resolvedCoin = COINS[String(coin).toLowerCase()];
+    // Quoting a coin we cannot deliver is worse than refusing it: the customer
+    // transfers naira from their own bank app, and an order Linq cannot fill
+    // has already taken their money.
+    const resolvedCoin = ONRAMP_COINS[String(coin).toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({ error: "coin must be xlm or usdc" });
+      res.status(400).json({
+        error: `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
+        code: "coin_not_available",
+      });
       return;
     }
 

@@ -1,9 +1,13 @@
 import { mkdirSync, writeFileSync } from "fs";
 import path from "path";
 import { OpenAPIRegistry, OpenApiGeneratorV3 } from "@asteasolutions/zod-to-openapi";
+import { getOhlcRefreshIntervalMs } from "../ohlcConfig";
 import {
   addressPathSchema,
   booleanOkResponseSchema,
+  candlesParamsSchema,
+  candlesQuerySchema,
+  candlesResponseSchema,
   errorResponseSchema,
   healthzResponseSchema,
   hostFnQuerySchema,
@@ -40,6 +44,8 @@ import {
   transferExportQuerySchema,
   binaryExportResponseSchema,
   linqWebhookAckResponseSchema,
+  offrampAvailabilityResponseSchema,
+  offrampRateQuerySchema,
   offrampRateResponseSchema,
   offrampVerifyBankBodySchema,
   offrampVerifiedBankSchema,
@@ -54,6 +60,8 @@ import {
   ngnCustomerStatusResponseSchema,
   feeReportQuerySchema,
   feeReportResponseSchema,
+  feesQuerySchema,
+  feesResponseSchema,
 } from "./schemas";
 
 const registry = new OpenAPIRegistry();
@@ -399,6 +407,22 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: "get",
+  path: "/fees",
+  summary: "Veil platform fee",
+  description:
+    "What the wallet should charge on a send, and where to pay it, per asset. The fee " +
+    "is collected on-chain in the same transaction as the send; this only tells the " +
+    "client the amount, so it can change without shipping an app. Unauthenticated and " +
+    "served with `Cache-Control: no-store`, because a stale fee is one the user was " +
+    "shown but did not agree to. `enabled: false` means no fee is configured today.",
+  request: { query: feesQuerySchema },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: feesResponseSchema } } },
+  },
+});
+
 const transferExportResponses = {
   200: {
     description: "File download of the full matching transfer set (no pagination).",
@@ -466,10 +490,31 @@ const internalErrorResponses = {
 
 registry.registerPath({
   method: "get",
+  path: "/offramp/availability",
+  summary: "Is cash-out enabled on this deployment",
+  description:
+    internalDescription +
+    " Answers the availability question without pricing anything: it makes no provider call, so it costs none of the shared rate allowance.",
+  "x-internal": true,
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: offrampAvailabilityResponseSchema } },
+    },
+    ...commonErrorResponses,
+    // No 502: nothing here reaches the provider. 503 is the answer a client
+    // hides its cash-out CTA on, so it is the one that has to be documented.
+    503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: offrampErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
   path: "/offramp/rate",
-  summary: "Indicative NGN/USDC rate",
+  summary: "Indicative naira-per-coin rate",
   description: internalDescription,
   "x-internal": true,
+  request: { query: offrampRateQuerySchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampRateResponseSchema } } },
     ...internalErrorResponses,
@@ -559,6 +604,22 @@ registry.registerPath({
     503: { description: "Fee reporting is not configured on this deployment", content: { "application/json": { schema: errorResponseSchema } } },
   },
 });
+
+if (getOhlcRefreshIntervalMs() !== undefined) {
+  registry.registerPath({
+    method: "get",
+    path: "/candles/{bucket}/{contractId}",
+    summary: "OHLC candles for a token contract (single-network deployments only)",
+    request: {
+      params: candlesParamsSchema,
+      query: candlesQuerySchema,
+    },
+    responses: {
+      200: { description: "OK", content: { "application/json": { schema: candlesResponseSchema } } },
+      ...commonErrorResponses,
+    },
+  });
+}
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
