@@ -557,9 +557,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [...] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [...] }
    */
   app.get(
     "/transfers/incoming/:address",
@@ -698,9 +699,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [{ ...fields, direction }] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [{ ...fields, direction }] }
    */
   app.get(
     "/transfers/address/:address",
@@ -1005,9 +1007,10 @@ export function createApp(): express.Application {
    *   toLedger    — inclusive upper ledger bound
    *   limit       — page size (max 200, default 50)
    *   offset      — pagination offset (default 0)
+   *   includeTotal— also return `total`, which costs a full COUNT (#206)
    *
    * Response:
-   *   { total, limit, offset, transfers: [...] }
+   *   { total?, hasMore, nextCursor, limit, offset, transfers: [...] }
    */
   app.get(
     "/nfts/transfers",
