@@ -9,6 +9,12 @@ jest.mock("../../db", () => ({
   prisma: { $queryRaw: jest.fn() },
 }));
 
+// The stale-read middleware probes RPC on every GET; without this the suite
+// pays a live network round-trip on CI and the first test blows its 5s budget.
+jest.mock("../../rpc", () => ({
+  getLatestLedger: jest.fn().mockResolvedValue(1_000_000),
+}));
+
 const mockQueryBalances = queryBalances as jest.MockedFunction<typeof queryBalances>;
 
 describe("Accounts route handlers", () => {
