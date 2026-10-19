@@ -18,6 +18,7 @@ import {
   startAllIndexers,
   isIndexerRunning,
   getIndexerUnstartedReason,
+  stopIndexerLoops,
   _resetIndexerLoops,
 } from "../indexer";
 import { Asset, Networks } from "@stellar/stellar-sdk";
@@ -45,6 +46,11 @@ beforeEach(() => {
   _resetRpcClients();
   _resetIndexerLoops();
 });
+
+// The startAllIndexers case below launches a real background loop. Without
+// this it crash-restarts every 10s for the rest of the run — jest never exits
+// on its own, and the spam starves later suites into timeouts.
+afterAll(() => stopIndexerLoops());
 
 describe("enabledNetworks", () => {
   it("defaults to the single configured network, so existing deployments are unchanged", () => {
