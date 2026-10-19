@@ -227,14 +227,15 @@ describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
     expect(res.body.coin).toBe("xlm");
   });
 
-  // Linq told us on 2026-10-19 that they hold liquidity to provision XLM and
-  // not USDC. The onramp is the direction where that bites: the customer pays
-  // naira and Linq delivers, so quoting a coin they cannot source would take
-  // real money for an order that cannot be filled.
-  it("refuses USDC on the onramp, because Linq cannot source it", async () => {
+  // Linq cannot source USDC for the onramp, but the refusal belongs on order
+  // creation, not here: a quote moves no money, and installed APKs probe this
+  // very route with `coin=usdc` to decide whether to show the naira entry
+  // point at all. Refusing it here would hide the whole feature from everyone
+  // who already has the app, while blocking nothing.
+  it("still quotes USDC, because a quote is not an order", async () => {
     const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
-    expect(res.status).toBe(400);
-    expect(res.body.code).toBe("coin_not_available");
+    expect(res.status).toBe(200);
+    expect(res.body.rate).toBeCloseTo(1450, 6);
   });
 
 
@@ -291,6 +292,19 @@ describe("the server refuses a mispriced order", () => {
     const res = await mainnet(request(makeApp()).post("/ngn/onramp/orders").send(order(290)));
     expect(res.status).toBe(200);
     expect(createOnrampOrder).toHaveBeenCalled();
+  });
+
+  // Linq told us on 2026-10-19 that they hold liquidity to provision XLM and
+  // not USDC. This is the direction where that bites: the customer transfers
+  // naira from their own bank app and *Linq* delivers the crypto, so an order
+  // for a coin they cannot source has already taken real money.
+  it("refuses a USDC order, because Linq cannot source it", async () => {
+    const res = await mainnet(
+      request(makeApp()).post("/ngn/onramp/orders").send({ ...order(1450), coin: "usdc" }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("coin_not_available");
+    expect(createOnrampOrder).not.toHaveBeenCalled();
   });
 
   it("tolerates ordinary drift while the user sits on the confirm screen", async () => {

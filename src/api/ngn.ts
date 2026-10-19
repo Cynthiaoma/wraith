@@ -278,12 +278,18 @@ const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
  * naira and *Linq* delivers the crypto, so a coin they cannot source is an
  * order that takes real money and cannot be filled.
  *
- * The other two directions are unaffected and deliberately still use `COINS`:
+ * Only order creation is gated. `GET /ngn/onramp/rate` deliberately still
+ * quotes both, because a quote moves no money and installed APKs probe it with
+ * `coin=usdc` to decide whether to show the naira entry point at all —
+ * refusing it there would not block a USDC purchase, it would hide the whole
+ * naira feature from every user who already has the app.
+ *
+ * The other two rails are unaffected and also still use `COINS`:
  *   - the offramp sends crypto *to* Linq, so their inventory is irrelevant;
  *   - a bill is funded from the user's own balance, not from Linq's.
  *
  * This is a provider-inventory limit, not a protocol one. When they can source
- * USDC, delete this map and point the two onramp routes back at `COINS`.
+ * USDC, delete this map and point the order route back at `COINS`.
  */
 const ONRAMP_COINS: Record<string, OnrampCoin> = { xlm: "xlm" };
 const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
@@ -465,12 +471,9 @@ export function createNgnRouter(
     // reproduce exactly that: a caller that forgot the coin would get a
     // plausible number that is wrong by a factor of five. Refusing is the only
     // answer that cannot be mistaken for an answer.
-    const resolvedCoin = ONRAMP_COINS[String(req.query["coin"] ?? "").toLowerCase()];
+    const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({
-        error: `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
-        code: "coin_not_available",
-      });
+      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
       return;
     }
 
