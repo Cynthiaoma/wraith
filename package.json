@@ -7,7 +7,7 @@
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "jest --runInBand",
+    "test": "jest --runInBand --forceExit",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "jest --watch",
     "test:chaos": "jest --runInBand --testPathPatterns=tests/chaos --testTimeout=300000 --config=jest.chaos.config.js",
