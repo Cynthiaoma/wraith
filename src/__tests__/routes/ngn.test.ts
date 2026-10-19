@@ -170,9 +170,9 @@ describe("the naira rate is fetched once for everyone", () => {
 
   it("serves repeat callers from one fetch", async () => {
     const app = makeApp();
-    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
     await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
-    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(getOnrampRate).toHaveBeenCalledTimes(1);
   });
 
@@ -188,24 +188,24 @@ describe("the naira rate is fetched once for everyone", () => {
     const app = makeApp();
     const all = Promise.all(
       [1, 2, 3, 4, 5].map(() =>
-        mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" })),
+        mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" })),
       ),
     );
     release(1450);
     const results = await all;
 
     expect(getOnrampRate).toHaveBeenCalledTimes(1);
-    for (const res of results) expect(res.body.rate).toBeCloseTo(1450, 6);
+    for (const res of results) expect(res.body.rate).toBeCloseTo(290, 6);
   });
 
   it("does not cache a failure", async () => {
     (getOnrampRate as jest.Mock).mockRejectedValueOnce(new LinqError("down", 502));
     const app = makeApp();
-    const first = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const first = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(first.status).toBe(502);
 
     (getOnrampRate as jest.Mock).mockResolvedValue(1450);
-    const second = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const second = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(second.status).toBe(200);
   });
 });
@@ -227,11 +227,16 @@ describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
     expect(res.body.coin).toBe("xlm");
   });
 
-  it("quotes naira per dollar for USDC, which is the same number as before", async () => {
+  // Linq told us on 2026-10-19 that they hold liquidity to provision XLM and
+  // not USDC. The onramp is the direction where that bites: the customer pays
+  // naira and Linq delivers, so quoting a coin they cannot source would take
+  // real money for an order that cannot be filled.
+  it("refuses USDC on the onramp, because Linq cannot source it", async () => {
     const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
-    expect(res.status).toBe(200);
-    expect(res.body.rate).toBeCloseTo(1450, 6);
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("coin_not_available");
   });
+
 
   // Linq's own endpoint accepts a coin and ignores it, which is how a wrong
   // number looked like a right one for weeks. Ours refuses.
@@ -434,7 +439,7 @@ describe("onramp rate", () => {
     (getOnrampRate as jest.Mock).mockResolvedValue(1356.15);
     (usdPerCoin as jest.Mock).mockResolvedValue(1);
 
-    const ask = () => mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const ask = () => mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     const first = await ask();
     const second = await ask();
 

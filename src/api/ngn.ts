@@ -269,6 +269,23 @@ function createLookupLimiter(): RateLimitRequestHandler {
 }
 
 const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
+
+/**
+ * Coins the **onramp** may deliver. XLM only, for now.
+ *
+ * Linq told us on 2026-10-19 that they hold liquidity to provision XLM and not
+ * USDC. The onramp is the one direction where that matters: the customer pays
+ * naira and *Linq* delivers the crypto, so a coin they cannot source is an
+ * order that takes real money and cannot be filled.
+ *
+ * The other two directions are unaffected and deliberately still use `COINS`:
+ *   - the offramp sends crypto *to* Linq, so their inventory is irrelevant;
+ *   - a bill is funded from the user's own balance, not from Linq's.
+ *
+ * This is a provider-inventory limit, not a protocol one. When they can source
+ * USDC, delete this map and point the two onramp routes back at `COINS`.
+ */
+const ONRAMP_COINS: Record<string, OnrampCoin> = { xlm: "xlm" };
 const BILL_CATEGORIES: BillCategory[] = ["airtime", "data", "electricity", "cabletv", "betting"];
 
 /** A classic `G…` account, which is what Linq pays to and refunds to. */
@@ -448,9 +465,12 @@ export function createNgnRouter(
     // reproduce exactly that: a caller that forgot the coin would get a
     // plausible number that is wrong by a factor of five. Refusing is the only
     // answer that cannot be mistaken for an answer.
-    const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
+    const resolvedCoin = ONRAMP_COINS[String(req.query["coin"] ?? "").toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
+      res.status(400).json({
+        error: `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
+        code: "coin_not_available",
+      });
       return;
     }
 
@@ -472,9 +492,15 @@ export function createNgnRouter(
     // The crypto is delivered here, so it must be an address Linq can pay.
     if (rejectContractAddress(res, walletAddress, "walletAddress")) return;
 
-    const resolvedCoin = COINS[String(coin).toLowerCase()];
+    // Quoting a coin we cannot deliver is worse than refusing it: the customer
+    // transfers naira from their own bank app, and an order Linq cannot fill
+    // has already taken their money.
+    const resolvedCoin = ONRAMP_COINS[String(coin).toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({ error: "coin must be xlm or usdc" });
+      res.status(400).json({
+        error: `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
+        code: "coin_not_available",
+      });
       return;
     }
 
