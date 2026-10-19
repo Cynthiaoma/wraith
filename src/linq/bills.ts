@@ -36,32 +36,12 @@
  * every call moves real money. See `assertOnrampNetwork` in `./onramp`.
  */
 
-import { LinqError, retryOnProviderFailure } from "./client";
-
-const BASE_URL =
-  process.env.LINQ_BASE_URL?.trim() ||
-  "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
-
-const TIMEOUT_MS = 15_000;
-const TOTAL_BUDGET_MS = 35_000;
-
-function apiKey(): string {
-  const key = process.env.LINQ_API_KEY?.trim();
-  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500);
-  return key;
-}
-
-type CallInit = {
-  method?: string;
-  body?: unknown;
-  deadline?: number;
-  query?: Record<string, string>;
-};
+import { LinqError, linqCall, retryOnProviderFailure, TOTAL_BUDGET_MS } from "./http";
 
 /**
- * One request. Nothing here logs a request body: these carry the customer's
- * phone number and meter number, and an error handler that prints the body it
- * failed on is how personal data reaches a log aggregator.
+ * Every bill request goes through the shared client in `./http`. Bodies here
+ * carry the customer's phone or meter number; that client never logs a
+ * request body, and redacts long digit runs from any response it logs.
  */
 async function call<T>(path: string, init: CallInit = {}): Promise<T> {
   const { method = "GET", body, deadline, query } = init;
@@ -136,6 +116,7 @@ async function call<T>(path: string, init: CallInit = {}): Promise<T> {
 
   return parsed as T;
 }
+const call = linqCall;
 
 // ─── Categories ──────────────────────────────────────────────────────────────
 

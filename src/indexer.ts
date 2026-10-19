@@ -34,9 +34,9 @@ export function resolveNftContractIds(network?: Network): string[] {
 // These are derived from Asset.native().contractId(Networks.PUBLIC / Networks.TESTNET)
 // and serve as the backwards-compatible default when SAC_CONTRACT_IDS is unset.
 export const DEFAULT_XLM_SAC_MAINNET =
-  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
+  "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA";
 export const DEFAULT_XLM_SAC_TESTNET =
-  "CDMLFMKMMD7MWZP3FKUBZPVHTUEDLSX4BYGYKH4GCESXYHS3IHQ4EIG4";
+  "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC";
 
 /**
  * Resolve the list of SAC contract IDs to watch.
@@ -211,9 +211,33 @@ export function runningNetworks(): Network[] {
   return [...loops.keys()];
 }
 
-/** Test-only: drops loop state between cases. */
+/** Networks that were enabled but failed to start, with the reason. */
+const unstartedNetworks = new Map<Network, string>();
+
+export function isIndexerRunning(network: Network): boolean {
+  return loops.has(network);
+}
+
+export function isIndexerStopped(network: Network): boolean {
+  return unstartedNetworks.has(network);
+}
+
+export function getIndexerUnstartedReason(network: Network): string | undefined {
+  return unstartedNetworks.get(network);
+}
+
+export function getUnstartedNetworks(): Record<string, string> {
+  return Object.fromEntries(unstartedNetworks);
+}
+
+export function setIndexerUnstarted(network: Network, reason: string): void {
+  unstartedNetworks.set(network, reason);
+}
+
+/** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
   loops.clear();
+  unstartedNetworks.clear();
 }
 
 /**
@@ -545,9 +569,10 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
       validateNetworkConfig([net]);
       runnable.push(net);
     } catch (err) {
+      const message = (err as Error).message;
+      setIndexerUnstarted(net, message);
       console.error(
-        `[indexer/${net}] NOT STARTED — ${(err as Error).message}
-` +
+        `[indexer/${net}] NOT STARTED — ${message}\n` +
           `[indexer/${net}] Reads for this network will serve whatever is already ` +
           `indexed and fall behind until it is configured. Other networks and the ` +
           `HTTP API are unaffected.`,
