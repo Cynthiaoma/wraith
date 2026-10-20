@@ -55,7 +55,7 @@ describe("environment configuration", () => {
 
   it("reports all missing required variables together", () => {
     expect(() => validateEnv({ STELLAR_NETWORK: "mainnet" })).toThrow(
-      "Missing required env vars: DATABASE_URL, DIRECT_DATABASE_URL, SOROBAN_RPC_URL_MAINNET",
+      "Missing required env vars: DATABASE_URL, DIRECT_DATABASE_URL",
     );
   });
 
@@ -70,7 +70,15 @@ describe("environment configuration", () => {
     ).not.toThrow();
   });
 
-  it("requires a network-specific RPC URL when indexing multiple networks", () => {
+  // This is the deployed configuration, and an earlier version of validateEnv
+  // rejected it: mainnet enabled with no SOROBAN_RPC_URL_MAINNET. The service
+  // crash-looped on 2026-10-20 because of it, after months of running fine.
+  //
+  // A missing per-network RPC is not a reason to refuse to start. planNetworks()
+  // skips that one indexer loop and reports it on /status, so every other
+  // network keeps indexing and the whole HTTP surface — including the naira
+  // rails, which never touch Soroban RPC at all — keeps serving.
+  it("does not refuse to boot when one network has no RPC configured", () => {
     expect(() =>
       validateEnv({
         DATABASE_URL: "postgresql://localhost/wraith",
@@ -79,7 +87,17 @@ describe("environment configuration", () => {
         NETWORKS: "testnet,mainnet",
         SOROBAN_RPC_URL: "https://rpc.example.invalid",
       }),
-    ).toThrow(/SOROBAN_RPC_URL_MAINNET/);
+    ).not.toThrow();
+  });
+
+  it("does not refuse to boot with no RPC configured at all", () => {
+    expect(() =>
+      validateEnv({
+        DATABASE_URL: "postgresql://localhost/wraith",
+        DIRECT_DATABASE_URL: "postgresql://localhost/wraith",
+        NETWORKS: "testnet,mainnet",
+      }),
+    ).not.toThrow();
   });
 
   it("does not require RPC when the indexer is disabled", () => {
