@@ -98,6 +98,30 @@ export class LinqError extends Error {
 /** A provider 429 carries how long we should wait before the retry. */
 type RateLimited = LinqError & { retryAfterMs?: number };
 
+/**
+ * How a request failed without an HTTP answer, when it did.
+ *
+ * The status alone cannot say: our own abort and a provider's 504 are both
+ * 504, and "unreachable" and a provider's 502 are both 502. The difference
+ * decides whether a request may be sent again — a NIN check in particular
+ * must not be resent after our own timeout, because the provider may still
+ * be working on the one we sent. Read it with {@link linqTransport}.
+ */
+export type LinqTransport = "timeout" | "unreachable";
+type TransportFailure = LinqError & { transport?: LinqTransport };
+
+function withTransport(err: LinqError, transport: LinqTransport): LinqError {
+  return Object.assign(err, { transport });
+}
+
+/**
+ * `"timeout"` when we gave up waiting, `"unreachable"` when no connection was
+ * made, and undefined when the provider answered (whatever the status).
+ */
+export function linqTransport(err: unknown): LinqTransport | undefined {
+  return err instanceof LinqError ? (err as TransportFailure).transport : undefined;
+}
+
 export interface LinqCallOptions {
   method?: string;
   /** JSON-encoded when present. Never logged. */
@@ -240,12 +264,12 @@ async function attempt<T>(
     const waited = Date.now() - startedAt;
     if (err instanceof Error && err.name === "AbortError") {
       console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
-      throw new LinqError("Linq did not respond in time", 504);
+      throw withTransport(new LinqError("Linq did not respond in time", 504), "timeout");
     }
     console.warn(
       `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    throw new LinqError("Could not reach Linq", 502);
+    throw withTransport(new LinqError("Could not reach Linq", 502), "unreachable");
   } finally {
     clearTimeout(timer);
   }
@@ -318,7 +342,9 @@ export async function linqCall<T>(path: string, options: LinqCallOptions = {}): 
 
   for (let tried = 0; ; tried++) {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new LinqError("Linq did not respond in time", 504);
+    if (remaining <= 0) {
+      throw withTransport(new LinqError("Linq did not respond in time", 504), "timeout");
+    }
 
     try {
       // Never wait past the deadline, even on the first attempt: a call made
