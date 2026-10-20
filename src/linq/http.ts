@@ -385,8 +385,19 @@ export async function linqCall<T>(path: string, options: LinqCallOptions = {}): 
  *
  * Order creation can fail transiently at the provider — "Wallet generation
  * failed" is it not managing to mint the deposit address. A 4xx is about the
- * request and is never retried. The retry sends the identical body,
- * idempotencyKey included, so the provider can recognise it as the same order.
+ * request and is never retried.
+ *
+ * The retry sends the identical body. Whether that is SAFE depends on the
+ * caller, not on this function, because a 5xx or a dropped connection does not
+ * mean nothing was created — Linq may have done the work and lost the answer:
+ *
+ *  - offramp orders carry an idempotencyKey, and Linq is believed to return the
+ *    original order for a key it has seen. Believed, not documented to us.
+ *  - customers are keyed on customerRef, and Linq returns the existing one.
+ *  - onramp orders and bills carry NO key. A retry here after a lost answer
+ *    places a second, unpaid order; the caller is given the second.
+ *
+ * Wrap nothing new in this without deciding which of those three it is.
  *
  * `deadline` bounds the pair, so the retry cannot double the caller's budget.
  */
