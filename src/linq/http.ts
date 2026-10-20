@@ -154,6 +154,25 @@ export interface LinqCallOptions {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * The message for a failure whose body gave no reason a person could read.
+ *
+ * It says what is known and nothing more. A 4xx is the provider refusing the
+ * request, so "rejected" is simply true; a 5xx is the provider failing, and
+ * calling that a rejection tells the user their request was at fault — a cause
+ * nobody sent. The KYC screens branch on `code`, not on this sentence, so the
+ * sentence must never be the thing that implies one. The status and any code
+ * ride along because they are facts, and they are what diagnoses the next one.
+ * (W087)
+ */
+export function unexplainedFailure(status: number, code?: string): string {
+  if (status >= 400 && status < 500) {
+    return code ? `Linq rejected the request (${code})` : "Linq rejected the request";
+  }
+  const detail = code ? `HTTP ${status}, ${code}` : `HTTP ${status}`;
+  return `Linq returned an error without giving a reason (${detail})`;
+}
+
 /** The first of `values` that is a non-empty string, trimmed, or undefined. */
 function firstString(...values: unknown[]): string | undefined {
   for (const value of values) {
@@ -290,7 +309,7 @@ async function attempt<T>(
     const message =
       plain && plain.length <= MAX_PLAIN_MESSAGE && !/^\s*</.test(plain)
         ? plain
-        : "Linq rejected the request";
+        : unexplainedFailure(response.status);
     throw Object.assign(
       new LinqError(message, response.status, undefined, retryAfterSeconds(response)),
       { retryAfterMs: retryAfterWaitMs(response) },
@@ -311,7 +330,7 @@ async function attempt<T>(
     // is what reaches the user, and a bare fallback leaves them a guess.
     const message =
       firstString(body["message"], body["error"], body["msg"], body["detail"], body["reason"]) ??
-      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
+      unexplainedFailure(response.status, code);
     // Linq names the reference an already-registered identity belongs to.
     const existingCustomerRef = firstString(body["customerRef"], body["customer_ref"]);
     throw Object.assign(

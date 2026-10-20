@@ -174,6 +174,24 @@ answer was lost), that is returned and the NIN is not sent again. If the status
 cannot be read either, the original failure is returned rather than resending
 blind.
 
+**Failures.** The provider documented these on 2026-10-14. `code` is forwarded
+verbatim; branch on it, never on `error`.
+
+| `code` | Provider status | wraith answers |
+| --- | --- | --- |
+| `invalid_nin_format` | 400 | 400 — also sent by wraith's own 11-digit check |
+| `nin_already_used` | 409 | 409 |
+| `nin_verification_failed` | 422 | 422 |
+| `kyc_provider_error` | 502 | 502 |
+| `kyc_internal_error` | 500 | 502 (a provider 5xx is ours to own) |
+
+An **undocumented** code is passed through as sent, never mapped onto one of
+these. A body with **no usable code** omits `code` entirely, and `error` says
+only that the request failed and its status — never a cause nobody sent. Every
+case, with the provider's body and wraith's answer side by side, is in
+[`fixtures/linq/kyc-errors.json`](../fixtures/linq/kyc-errors.json); the clients
+test against that same file.
+
 ### 3. Lock a rate
 
 ```

@@ -40,6 +40,8 @@
 
 import { LinqError, linqCall, linqTransport, retryOnProviderFailure, TOTAL_BUDGET_MS } from "./http";
 
+export { unexplainedFailure } from "./http";
+
 /**
  * Every onramp and customer request goes through the shared client in
  * `./http`, which owns auth, timeouts, error parsing and logging. Nothing here
