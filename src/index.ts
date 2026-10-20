@@ -13,10 +13,18 @@ import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
 import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
 import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
+import { validateEnv } from "./validateEnv";
 
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
+  // First thing in `main`, not at module load: a missing DATABASE_URL should
+  // stop the process with the name of what is missing, rather than surface
+  // later as a connection error that says nothing about configuration. It runs
+  // here rather than top-level because the startup-wiring tests import this
+  // module, and a module-load throw would fail them on an env they do not need.
+  validateEnv();
+
   // Converge the schema on every startup, so a deploy needs no separate
   // pre-deploy step.
   //

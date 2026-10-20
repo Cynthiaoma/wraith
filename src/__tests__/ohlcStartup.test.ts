@@ -33,6 +33,14 @@ describe("OHLC refresh startup wiring", () => {
     delete process.env.SKIP_INDEXER;
     process.env.NETWORKS = "testnet";
     process.env.STELLAR_NETWORK = "testnet";
+    // `main()` now validates configuration before it starts anything (#256),
+    // and this suite boots the real entrypoint, so it has to supply the two
+    // vars a real start requires. The values are never connected to — every
+    // module that would use them is mocked above.
+    process.env.DATABASE_URL = "postgresql://user:pass@localhost:5432/wraith_test";
+    process.env.DIRECT_DATABASE_URL = "postgresql://user:pass@localhost:5432/wraith_test";
+    // Cases below enable mainnet, which a real start requires an RPC for.
+    process.env.SOROBAN_RPC_URL_MAINNET = "https://mainnet.example.invalid";
     signalHandlers.clear();
     jest.spyOn(console, "log").mockImplementation(() => {});
     jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
