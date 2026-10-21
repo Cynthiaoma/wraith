@@ -3,6 +3,7 @@ import express, { Request, Response, Router } from "express";
 import { prisma } from "../db";
 import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
+import { isFailureStatus, recordMoneyFailure } from "../linq/moneyFailures";
 import { DEFAULT_NETWORK } from "../network";
 
 /**
@@ -81,12 +82,13 @@ export function createLinqWebhookRouter(): Router {
           return;
         }
 
+        const finalStatus = event.status ?? event.event;
         await prisma.offrampOrder.update({
           where: {
             network_orderId: { network: existing.network ?? network, orderId: event.orderId },
           },
           data: {
-            status: event.status ?? event.event,
+            status: finalStatus,
             ...(event.amountStableCoin != null
               ? { settledStableCoin: String(event.amountStableCoin) }
               : {}),
@@ -94,11 +96,45 @@ export function createLinqWebhookRouter(): Router {
             ...(event.txHash ? { depositTxHash: event.txHash } : {}),
           },
         });
+
+        // An offramp order that ended failed is the incident this table exists
+        // for: the user's crypto was taken and the naira payout did not
+        // complete. Before this was written down, the only thing that ever
+        // learned about it was a client that happened to poll. A status poll
+        // recording the same order hits the same (network, kind, orderId) row,
+        // so webhook plus poll is one incident, not two.
+        if (isFailureStatus(finalStatus)) {
+          await recordMoneyFailure({
+            network: existing.network ?? network,
+            rail: "offramp",
+            kind: "payout_rejected",
+            orderId: event.orderId,
+            publicId: existing.publicId,
+            providerCode: finalStatus,
+            message: `Offramp order ended as "${finalStatus}" — the naira payout did not complete.`,
+          });
+        }
       } catch (err) {
         // The response has already gone, so this cannot fail the delivery.
         // Logged loudly because the reconciliation is now missing and only the
         // status poll will catch it up.
         console.error("[linq] failed to reconcile webhook:", err);
+
+        // "Reconciliation gave up" is its own money-affecting failure: the
+        // event asserts money moved, and our rows no longer describe it. The
+        // rail is unknown here — the event may name an order in either table
+        // and the lookup itself is what failed. The error's name only: a
+        // database error's message is not operator-facing prose.
+        await recordMoneyFailure({
+          network: DEFAULT_NETWORK,
+          rail: "unknown",
+          kind: "reconcile_failed",
+          orderId: event.orderId,
+          providerCode: event.status ?? event.event,
+          message:
+            `Webhook event "${event.event}" for order ${event.orderId} could not be reconciled ` +
+            `(${(err as Error)?.name ?? "unknown error"}); only a status poll can catch it up.`,
+        });
       }
     },
   );

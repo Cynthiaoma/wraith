@@ -20,6 +20,7 @@ import {
   getOfframpStatus,
   verifyBank,
 } from "../linq/client";
+import { isFailureStatus, recordMoneyFailure } from "../linq/moneyFailures";
 import { ngnPerCoin } from "./ngn";
 import { type OnrampCoin } from "../linq/onramp";
 
@@ -647,6 +648,25 @@ export function createOfframpRouter(
             settledNGN: String(live.amountNGN),
           },
         });
+
+        // The webhook is a push we might have missed, and this poll is what
+        // catches one up — including the case that matters most. An order that
+        // ended failed means the user's crypto was taken and the naira payout
+        // did not complete; if the `order.failed` delivery never arrived, this
+        // poll is the only thing that ever learns it. Recorded under the same
+        // (network, kind, orderId) row the webhook path uses, so when both
+        // fire it is one incident, not two.
+        if (isFailureStatus(live.status)) {
+          await recordMoneyFailure({
+            network: net,
+            rail: "offramp",
+            kind: "payout_rejected",
+            orderId: row.orderId,
+            publicId: row.publicId,
+            providerCode: live.status,
+            message: `Offramp order ended as "${live.status}" — the naira payout did not complete.`,
+          });
+        }
       }
       res.json({
         ...live,

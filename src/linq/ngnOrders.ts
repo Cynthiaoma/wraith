@@ -30,6 +30,7 @@
  */
 
 import { prisma } from "../db";
+import { isFailureStatus, recordMoneyFailure } from "./moneyFailures";
 
 export type NgnOrderKind = "onramp" | "bill";
 
@@ -178,10 +179,11 @@ export async function reconcileNgnOrder(event: {
   const existing = await prisma.ngnOrder.findFirst({ where: { orderId: event.orderId } });
   if (!existing) return false;
 
+  const finalStatus = event.status ?? event.event;
   await prisma.ngnOrder.update({
     where: { network_orderId: { network: existing.network, orderId: event.orderId } },
     data: {
-      status: event.status ?? event.event,
+      status: finalStatus,
       ...(event.amountStableCoin != null
         ? { settledStableCoin: String(event.amountStableCoin) }
         : {}),
@@ -189,5 +191,24 @@ export async function reconcileNgnOrder(event: {
       ...(event.txHash ? { txHash: event.txHash } : {}),
     },
   });
+
+  // An order that ended failed after the user paid is a money-affecting
+  // failure and is written down as one. This is the case the table exists
+  // for: a biller refusing to vend is invisible to the chain, so without
+  // this record the only thing that ever learns about the failure is a
+  // client that happens to poll. A poll recording the same order hits the
+  // same (network, kind, orderId) row, so webhook plus poll is one incident.
+  if (isFailureStatus(finalStatus)) {
+    await recordMoneyFailure({
+      network: existing.network,
+      rail: existing.kind === "bill" ? "bill" : "onramp",
+      kind: "order_failed",
+      orderId: event.orderId,
+      providerCode: finalStatus,
+      message:
+        `${existing.kind === "bill" ? "Bill" : "Onramp"} order ended as "${finalStatus}" ` +
+        `— the order the user paid for did not complete.`,
+    });
+  }
   return true;
 }
