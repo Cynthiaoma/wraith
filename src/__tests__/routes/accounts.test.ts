@@ -9,10 +9,6 @@ jest.mock("../../db", () => ({
   prisma: { $queryRaw: jest.fn() },
 }));
 
-// The stale-read middleware probes RPC on every GET; without this the suite
-// pays a live network round-trip on CI and the first test blows its 5s budget.
-jest.mock("../../rpc", () => ({
-  getLatestLedger: jest.fn().mockResolvedValue(1_000_000),
 // The stale-read middleware probes RPC on every GET (#164), and this file was
 // the one route suite that left `../../rpc` real: the first request paid for a
 // live call to the public testnet Soroban endpoint, and when that took longer

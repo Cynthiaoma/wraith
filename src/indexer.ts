@@ -150,9 +150,6 @@ export type LoopState = {
 
 const loops = new Map<Network, LoopState>();
 
-/** Pending crash-restart timers, one per network. */
-const restartTimers = new Map<Network, ReturnType<typeof setTimeout>>();
-
 /** Build the isolated state for one network's loop. */
 export function createLoopState(network: Network): LoopState {
   const sacContractIds = resolveSacContractIds(network);
@@ -265,8 +262,6 @@ const requestedNetworks = new Set<Network>();
 /** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
   for (const loop of loops.values()) loop.stopped = true;
-  for (const timer of restartTimers.values()) clearTimeout(timer);
-  restartTimers.clear();
   for (const timer of restartTimers) clearTimeout(timer);
   restartTimers.clear();
   requestedNetworks.clear();
@@ -283,7 +278,7 @@ export function _resetIndexerLoops(): void {
  */
 export function stopIndexerLoops(): void {
   for (const loop of loops.values()) loop.stopped = true;
-  for (const timer of restartTimers.values()) clearTimeout(timer);
+  for (const timer of restartTimers) clearTimeout(timer);
   restartTimers.clear();
 }
 
@@ -560,13 +555,12 @@ export async function startIndexer(network?: Network): Promise<void> {
   }
 
   // ── Polling loop ────────────────────────────────────────────────────────────
-  while (true) {
-    if (loop.stopped) return;
-  // Runs while this loop is still the registered one. `_resetIndexerLoops`
-  // drops registrations between test cases, and a loop that outlives them
-  // would keep polling — and start a fresh RPC request — after the code that
-  // started it is gone. Production registers once and never clears.
-  while (loops.get(net) === loop) {
+  // Runs while this loop is still the registered one, and until it is asked to
+  // stop. `_resetIndexerLoops` drops registrations between test cases and
+  // `stopIndexerLoops` marks them stopped; a loop that outlives either would
+  // keep polling — and start a fresh RPC request — after the code that started
+  // it is gone. Production registers once and never clears.
+  while (loops.get(net) === loop && !loop.stopped) {
     try {
       const tip = await withRetry(() => loop.sourceSwitcher.getLatestLedger());
       const target = tip - TIP_LAG;
@@ -664,19 +658,16 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
 
   const run = (net: Network) => {
     startIndexer(net).catch((err) => {
-      // A stopped loop (or one stopped between restarts) stays stopped.
+      // A stopped loop (or one stopped between restarts) stays stopped —
+      // announcing "restarting in 10s" for a loop someone deliberately
+      // stopped would be a lie, with output arriving after the suite
+      // finished, which Jest counts as a failure.
       if (loops.get(net)?.stopped) return;
-      console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
-      const timer = setTimeout(() => {
-        restartTimers.delete(net);
-        if (!loops.get(net)?.stopped) run(net);
-      }, 10_000);
-      restartTimers.set(net, timer);
       if (!requestedNetworks.has(net)) return;
       console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
       const timer = setTimeout(() => {
         restartTimers.delete(timer);
-        run(net);
+        if (!loops.get(net)?.stopped) run(net);
       }, 10_000);
       restartTimers.add(timer);
       // Unref'd, because a restart wait is not a reason to keep a process
