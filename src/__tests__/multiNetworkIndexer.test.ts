@@ -19,6 +19,7 @@ import {
   startAllIndexers,
   isIndexerRunning,
   getIndexerUnstartedReason,
+  stopIndexerLoops,
   _resetIndexerLoops,
 } from "../indexer";
 import { Asset, Networks } from "@stellar/stellar-sdk";
@@ -47,6 +48,10 @@ beforeEach(() => {
   _resetIndexerLoops();
 });
 
+// The startAllIndexers case below launches a real background loop. Without
+// this it crash-restarts every 10s for the rest of the run — jest never exits
+// on its own, and the spam starves later suites into timeouts.
+afterAll(() => stopIndexerLoops());
 // A case that calls `startAllIndexers` starts a real loop, and the next
 // `beforeEach` is too late for the last case in the file: nothing runs after
 // it, so that loop would still be polling while Jest tears the environment

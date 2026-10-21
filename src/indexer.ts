@@ -140,6 +140,12 @@ export type LoopState = {
    * other — the longer job would never reach its threshold.
    */
   tombstoneCycleCount: number;
+  /**
+   * Set by {@link stopIndexerLoops}. The poll loop returns at the next
+   * iteration and a crashed loop is not restarted, so a test suite can leave
+   * no live loop behind.
+   */
+  stopped: boolean;
 };
 
 const loops = new Map<Network, LoopState>();
@@ -171,6 +177,7 @@ export function createLoopState(network: Network): LoopState {
     pollCycleCount: 0,
     tombstoneCycleCount: 0,
     knownLpPools: new Set(resolveLpPoolIds(network)),
+    stopped: false,
   };
 }
 
@@ -254,11 +261,25 @@ const requestedNetworks = new Set<Network>();
 
 /** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
+  for (const loop of loops.values()) loop.stopped = true;
   for (const timer of restartTimers) clearTimeout(timer);
   restartTimers.clear();
   requestedNetworks.clear();
   loops.clear();
   unstartedNetworks.clear();
+}
+
+/**
+ * Ask every running loop to stop and cancel pending crash-restarts.
+ *
+ * A stopped loop returns from `startIndexer` at the end of its current
+ * iteration and is not restarted, so a caller (a test suite's `afterAll`)
+ * leaves no live indexer behind in the process.
+ */
+export function stopIndexerLoops(): void {
+  for (const loop of loops.values()) loop.stopped = true;
+  for (const timer of restartTimers) clearTimeout(timer);
+  restartTimers.clear();
 }
 
 /**
@@ -465,7 +486,10 @@ export async function ingestWindow(
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 /**
- * Run one indexer loop for one network. Never returns.
+ * Run one indexer loop for one network.
+ *
+ * Runs until {@link stopIndexerLoops} marks this loop's state stopped, then
+ * returns at the end of the current iteration.
  *
  * Each call owns its own {@link LoopState}, so two concurrent loops share no
  * mutable state: separate counters, separate watch lists, separate source
@@ -531,11 +555,12 @@ export async function startIndexer(network?: Network): Promise<void> {
   }
 
   // ── Polling loop ────────────────────────────────────────────────────────────
-  // Runs while this loop is still the registered one. `_resetIndexerLoops`
-  // drops registrations between test cases, and a loop that outlives them
-  // would keep polling — and start a fresh RPC request — after the code that
-  // started it is gone. Production registers once and never clears.
-  while (loops.get(net) === loop) {
+  // Runs while this loop is still the registered one, and until it is asked to
+  // stop. `_resetIndexerLoops` drops registrations between test cases and
+  // `stopIndexerLoops` marks them stopped; a loop that outlives either would
+  // keep polling — and start a fresh RPC request — after the code that started
+  // it is gone. Production registers once and never clears.
+  while (loops.get(net) === loop && !loop.stopped) {
     try {
       const tip = await withRetry(() => loop.sourceSwitcher.getLatestLedger());
       const target = tip - TIP_LAG;
@@ -633,11 +658,16 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
 
   const run = (net: Network) => {
     startIndexer(net).catch((err) => {
+      // A stopped loop (or one stopped between restarts) stays stopped —
+      // announcing "restarting in 10s" for a loop someone deliberately
+      // stopped would be a lie, with output arriving after the suite
+      // finished, which Jest counts as a failure.
+      if (loops.get(net)?.stopped) return;
       if (!requestedNetworks.has(net)) return;
       console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
       const timer = setTimeout(() => {
         restartTimers.delete(timer);
-        run(net);
+        if (!loops.get(net)?.stopped) run(net);
       }, 10_000);
       restartTimers.add(timer);
       // Unref'd, because a restart wait is not a reason to keep a process
