@@ -140,6 +140,12 @@ export type LoopState = {
    * other — the longer job would never reach its threshold.
    */
   tombstoneCycleCount: number;
+  /**
+   * Set by {@link stopIndexerLoops}. The poll loop returns at the next
+   * iteration and a crashed loop is not restarted, so a test suite can leave
+   * no live loop behind.
+   */
+  stopped: boolean;
 };
 
 const loops = new Map<Network, LoopState>();
@@ -171,6 +177,7 @@ export function createLoopState(network: Network): LoopState {
     pollCycleCount: 0,
     tombstoneCycleCount: 0,
     knownLpPools: new Set(resolveLpPoolIds(network)),
+    stopped: false,
   };
 }
 
@@ -234,10 +241,45 @@ export function setIndexerUnstarted(network: Network, reason: string): void {
   unstartedNetworks.set(network, reason);
 }
 
+/**
+ * Restarts scheduled after a loop crashed, kept so a case that started a loop
+ * can cancel it again. Without this the chain outlives whoever called
+ * `startAllIndexers` — see `_resetIndexerLoops`.
+ */
+const restartTimers = new Set<NodeJS.Timeout>();
+
+/**
+ * Networks `startAllIndexers` was asked to keep running.
+ *
+ * A loop that rejects while its network is still in here crashed on its own
+ * and earns a restart. One that rejects after the set was dropped is a case
+ * tearing the database out from under it, and announcing "restarting in 10s"
+ * for a loop someone deliberately stopped would be a lie — with output
+ * arriving after the suite finished, which Jest counts as a failure.
+ */
+const requestedNetworks = new Set<Network>();
+
 /** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
+  for (const loop of loops.values()) loop.stopped = true;
+  for (const timer of restartTimers) clearTimeout(timer);
+  restartTimers.clear();
+  requestedNetworks.clear();
   loops.clear();
   unstartedNetworks.clear();
+}
+
+/**
+ * Ask every running loop to stop and cancel pending crash-restarts.
+ *
+ * A stopped loop returns from `startIndexer` at the end of its current
+ * iteration and is not restarted, so a caller (a test suite's `afterAll`)
+ * leaves no live indexer behind in the process.
+ */
+export function stopIndexerLoops(): void {
+  for (const loop of loops.values()) loop.stopped = true;
+  for (const timer of restartTimers) clearTimeout(timer);
+  restartTimers.clear();
 }
 
 /**
@@ -444,7 +486,10 @@ export async function ingestWindow(
 
 // ─── Main loop ────────────────────────────────────────────────────────────────
 /**
- * Run one indexer loop for one network. Never returns.
+ * Run one indexer loop for one network.
+ *
+ * Runs until {@link stopIndexerLoops} marks this loop's state stopped, then
+ * returns at the end of the current iteration.
  *
  * Each call owns its own {@link LoopState}, so two concurrent loops share no
  * mutable state: separate counters, separate watch lists, separate source
@@ -510,7 +555,12 @@ export async function startIndexer(network?: Network): Promise<void> {
   }
 
   // ── Polling loop ────────────────────────────────────────────────────────────
-  while (true) {
+  // Runs while this loop is still the registered one, and until it is asked to
+  // stop. `_resetIndexerLoops` drops registrations between test cases and
+  // `stopIndexerLoops` marks them stopped; a loop that outlives either would
+  // keep polling — and start a fresh RPC request — after the code that started
+  // it is gone. Production registers once and never clears.
+  while (loops.get(net) === loop && !loop.stopped) {
     try {
       const tip = await withRetry(() => loop.sourceSwitcher.getLatestLedger());
       const target = tip - TIP_LAG;
@@ -534,6 +584,7 @@ export async function startIndexer(network?: Network): Promise<void> {
 
       await maybeTombstoneExpiredContracts(loop, currentLedger);
     } catch (err) {
+      if (loops.get(net) !== loop) return;
       console.error(`[indexer/${net}] Unhandled error in poll loop:`, err);
       // Back off before retrying to avoid hammering the RPC on persistent errors
       await sleep(POLL_INTERVAL_MS * 2);
@@ -542,27 +593,28 @@ export async function startIndexer(network?: Network): Promise<void> {
 }
 
 /**
- * Start one loop per enabled network (see `NETWORKS`).
+ * Split the requested networks into the ones that can start and the ones that
+ * cannot, recording why for the latter.
  *
- * Loops are fault-isolated from each other: a loop that throws out of its own
- * retry handling is restarted on its own, because a mainnet RPC key expiring
- * must not stop testnet indexing. `startIndexer` never resolves, so this
- * returns immediately with the loops running in the background.
+ * Separate from starting them because this answer is what a caller acts on:
+ * `/status` reports the networks that were skipped, and a test can ask which
+ * loops *would* run without leaving a real one polling after the case that
+ * asked has finished. `startAllIndexers` starts what this returns.
+ *
+ * Validated per network, and a failure skips that network rather than throwing.
+ *
+ * `validateNetworkConfig(networks)` threw for the whole set if any one entry
+ * was misconfigured, which broke the isolation promised in
+ * `startAllIndexers` in the worst way: an unset SOROBAN_RPC_URL_MAINNET killed
+ * the process during main(), taking testnet indexing AND the HTTP API with it.
+ * The API does not index. The naira rails are plain HTTP to Linq and never
+ * touch Soroban RPC, so a missing mainnet endpoint was stopping /ngn from
+ * answering for a reason that has nothing to do with it.
+ *
+ * Serving reads on the networks that *are* configured, while saying loudly
+ * which one is not, beats refusing to serve anything.
  */
-export function startAllIndexers(networks: Network[] = enabledNetworks()): Network[] {
-  // Validated per network, and a failure skips that network rather than
-  // throwing.
-  //
-  // `validateNetworkConfig(networks)` threw for the whole set if any one entry
-  // was misconfigured, which broke the isolation promised above in the worst
-  // way: an unset SOROBAN_RPC_URL_MAINNET killed the process during main(),
-  // taking testnet indexing AND the HTTP API with it. The API does not index.
-  // The naira rails are plain HTTP to Linq and never touch Soroban RPC, so a
-  // missing mainnet endpoint was stopping /ngn from answering for a reason
-  // that has nothing to do with it.
-  //
-  // Serving reads on the networks that *are* configured, while saying loudly
-  // which one is not, beats refusing to serve anything.
+export function planNetworks(networks: Network[] = enabledNetworks()): Network[] {
   const runnable: Network[] = [];
   for (const net of networks) {
     try {
@@ -585,22 +637,57 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
       "[indexer] No network is configured for indexing. The API is still serving; " +
         "nothing is being indexed.",
     );
-    return [];
   }
+
+  return runnable;
+}
+
+/**
+ * Start one loop per enabled network (see `NETWORKS`).
+ *
+ * Loops are fault-isolated from each other: a loop that throws out of its own
+ * retry handling is restarted on its own, because a mainnet RPC key expiring
+ * must not stop testnet indexing. `startIndexer` never resolves, so this
+ * returns immediately with the loops running in the background.
+ */
+export function startAllIndexers(networks: Network[] = enabledNetworks()): Network[] {
+  const runnable = planNetworks(networks);
+  if (runnable.length === 0) return [];
 
   console.log(`[indexer] Starting loops for: ${runnable.join(", ")}`);
 
   const run = (net: Network) => {
     startIndexer(net).catch((err) => {
+      // A stopped loop (or one stopped between restarts) stays stopped —
+      // announcing "restarting in 10s" for a loop someone deliberately
+      // stopped would be a lie, with output arriving after the suite
+      // finished, which Jest counts as a failure.
+      if (loops.get(net)?.stopped) return;
+      if (!requestedNetworks.has(net)) return;
       console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
-      setTimeout(() => run(net), 10_000);
+      const timer = setTimeout(() => {
+        restartTimers.delete(timer);
+        if (!loops.get(net)?.stopped) run(net);
+      }, 10_000);
+      restartTimers.add(timer);
+      // Unref'd, because a restart wait is not a reason to keep a process
+      // alive — the API listening is. Held to the event loop, this chain is
+      // immortal: the first crashed loop reschedules itself forever, and
+      // anything that imported the module can never finish, let alone exit.
+      timer.unref();
     });
   };
 
+  for (const net of runnable) requestedNetworks.add(net);
   for (const net of runnable) run(net);
   return runnable;
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
+  return new Promise((resolve) => {
+    // Same reason as the restart timer above: the gap between two polls must
+    // not be what keeps the process running.
+    const timer = setTimeout(resolve, ms);
+    timer.unref();
+  });
 }

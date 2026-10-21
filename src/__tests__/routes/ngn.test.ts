@@ -9,6 +9,7 @@
  */
 import express from "express";
 import request from "supertest";
+import rateLimit from "express-rate-limit";
 
 import { createNgnRouter } from "../../api/ngn";
 import { networkMiddleware } from "../../middleware/network";
@@ -170,9 +171,9 @@ describe("the naira rate is fetched once for everyone", () => {
 
   it("serves repeat callers from one fetch", async () => {
     const app = makeApp();
-    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
     await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
-    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
+    await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(getOnrampRate).toHaveBeenCalledTimes(1);
   });
 
@@ -188,24 +189,24 @@ describe("the naira rate is fetched once for everyone", () => {
     const app = makeApp();
     const all = Promise.all(
       [1, 2, 3, 4, 5].map(() =>
-        mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" })),
+        mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" })),
       ),
     );
     release(1450);
     const results = await all;
 
     expect(getOnrampRate).toHaveBeenCalledTimes(1);
-    for (const res of results) expect(res.body.rate).toBeCloseTo(1450, 6);
+    for (const res of results) expect(res.body.rate).toBeCloseTo(290, 6);
   });
 
   it("does not cache a failure", async () => {
     (getOnrampRate as jest.Mock).mockRejectedValueOnce(new LinqError("down", 502));
     const app = makeApp();
-    const first = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const first = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(first.status).toBe(502);
 
     (getOnrampRate as jest.Mock).mockResolvedValue(1450);
-    const second = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const second = await mainnet(request(app).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     expect(second.status).toBe(200);
   });
 });
@@ -227,11 +228,17 @@ describe("the rate is per coin (the ₦1,000-for-0.6-XLM bug)", () => {
     expect(res.body.coin).toBe("xlm");
   });
 
-  it("quotes naira per dollar for USDC, which is the same number as before", async () => {
+  // Linq cannot source USDC for the onramp, but the refusal belongs on order
+  // creation, not here: a quote moves no money, and installed APKs probe this
+  // very route with `coin=usdc` to decide whether to show the naira entry
+  // point at all. Refusing it here would hide the whole feature from everyone
+  // who already has the app, while blocking nothing.
+  it("still quotes USDC, because a quote is not an order", async () => {
     const res = await mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
     expect(res.status).toBe(200);
     expect(res.body.rate).toBeCloseTo(1450, 6);
   });
+
 
   // Linq's own endpoint accepts a coin and ignores it, which is how a wrong
   // number looked like a right one for weeks. Ours refuses.
@@ -286,6 +293,19 @@ describe("the server refuses a mispriced order", () => {
     const res = await mainnet(request(makeApp()).post("/ngn/onramp/orders").send(order(290)));
     expect(res.status).toBe(200);
     expect(createOnrampOrder).toHaveBeenCalled();
+  });
+
+  // Linq told us on 2026-10-19 that they hold liquidity to provision XLM and
+  // not USDC. This is the direction where that bites: the customer transfers
+  // naira from their own bank app and *Linq* delivers the crypto, so an order
+  // for a coin they cannot source has already taken real money.
+  it("refuses a USDC order, because Linq cannot source it", async () => {
+    const res = await mainnet(
+      request(makeApp()).post("/ngn/onramp/orders").send({ ...order(1450), coin: "usdc" }),
+    );
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe("coin_not_available");
+    expect(createOnrampOrder).not.toHaveBeenCalled();
   });
 
   it("tolerates ordinary drift while the user sits on the confirm screen", async () => {
@@ -434,7 +454,7 @@ describe("onramp rate", () => {
     (getOnrampRate as jest.Mock).mockResolvedValue(1356.15);
     (usdPerCoin as jest.Mock).mockResolvedValue(1);
 
-    const ask = () => mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "usdc" }));
+    const ask = () => mainnet(request(makeApp()).get("/ngn/onramp/rate").query({ coin: "xlm" }));
     const first = await ask();
     const second = await ask();
 
@@ -676,5 +696,333 @@ describe("falling back to our own record", () => {
     const res = await mainnet(request(makeApp()).get("/ngn/onramp/orders/47ca0421?customerRef=u"));
 
     expect(res.status).toBe(502);
+  });
+});
+
+// ─── Rate limiting on creating routes (issue #245) ───────────────────────────
+//
+// The rate limiters are injected via `createNgnRouter(options)`, the same
+// pattern already used for `lookupLimiter`. That lets us drive the window
+// via env vars and set a tiny limit in tests without having to wait minutes.
+//
+// Key property to verify: our 429 and the provider's 429 are distinguishable.
+// When we refuse, the body carries `code: "veil_rate_limited"`. When the
+// provider refuses (forwarded through `sendLinqError`), it carries
+// `code: "rate_limited"`. A client can branch on these rather than guessing.
+
+describe("rate limiting on creating routes", () => {
+  // Use real express-rate-limit instances with tiny limits so tests hit them
+  // in a small number of requests, without relying on timing.
+  //
+  // Two scopes per route, matching the issue requirement: "scoped per customer
+  // reference as well as per IP." The per-IP limiter catches one caller with
+  // many references; the per-reference limiter catches one reference hammered.
+  function makeRateLimitedApp(ipMax: number, refMax: number) {
+    const tinyProvision = rateLimit({
+      windowMs: 60_000, limit: ipMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      message: { error: "Too many provisioning requests. Please wait before trying again.", code: "veil_rate_limited" },
+    });
+    const tinyProvisionRef = rateLimit({
+      windowMs: 60_000, limit: refMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      keyGenerator: (req: any) => {
+        const ref = req.body?.customerRef;
+        return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+      },
+      message: { error: "Too many provisioning requests for this customer.", code: "veil_rate_limited" },
+    });
+    const tinyKyc = rateLimit({
+      windowMs: 60_000, limit: ipMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      message: { error: "Too many identity verification attempts. Please wait before trying again.", code: "veil_rate_limited" },
+    });
+    const tinyKycRef = rateLimit({
+      windowMs: 60_000, limit: refMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      keyGenerator: (req: any) => {
+        const ref = req.body?.customerRef;
+        return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+      },
+      message: { error: "Too many KYC attempts for this customer.", code: "veil_rate_limited" },
+    });
+    const tinyOrders = rateLimit({
+      windowMs: 60_000, limit: ipMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      message: { error: "Too many order requests. Please wait before trying again.", code: "veil_rate_limited" },
+    });
+    const tinyOrdersRef = rateLimit({
+      windowMs: 60_000, limit: refMax, skipSuccessfulRequests: false,
+      standardHeaders: true, legacyHeaders: false,
+      keyGenerator: (req: any) => {
+        const ref = req.body?.customerRef;
+        return typeof ref === "string" && ref ? `ref:${ref}` : "ref:_none_";
+      },
+      message: { error: "Too many order requests for this customer.", code: "veil_rate_limited" },
+    });
+
+    const app = express();
+    app.use(express.json());
+    app.use(networkMiddleware);
+    app.use(
+      "/ngn",
+      createNgnRouter({
+        provisionLimiter: tinyProvision,
+        provisionRefLimiter: tinyProvisionRef,
+        kycLimiter: tinyKyc,
+        kycRefLimiter: tinyKycRef,
+        ordersLimiter: tinyOrders,
+        ordersRefLimiter: tinyOrdersRef,
+      }),
+    );
+    return app;
+  }
+
+  beforeEach(() => {
+    (getOnrampRate as jest.Mock).mockResolvedValue(1450);
+    (usdPerCoin as jest.Mock).mockImplementation(async (c: string) =>
+      c === "usdc" ? 1 : 0.2,
+    );
+    (provisionCustomer as jest.Mock).mockResolvedValue({
+      customerRef: "u",
+      verified: false,
+      created: true,
+    });
+    (submitCustomerKyc as jest.Mock).mockResolvedValue({
+      customerRef: "u",
+      verified: true,
+      status: "verified",
+    });
+    (createOnrampOrder as jest.Mock).mockResolvedValue({
+      orderId: "o1",
+      amountNgn: 290,
+      status: "awaiting payment",
+    });
+    (payBill as jest.Mock).mockResolvedValue({
+      id: "b1",
+      customerRef: "u",
+      wallet: "GDXYZ",
+      status: "initiated",
+    });
+  });
+
+  describe("POST /ngn/customers is rate-limited per IP", () => {
+    it("refuses past the per-IP limit with veil_rate_limited code", async () => {
+      // IP limit = 2, ref limit = 100 (high so only the IP limit is exercised).
+      const app = makeRateLimitedApp(2, 100);
+      const body = { customerRef: "u", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" };
+
+      const first = await mainnet(request(app).post("/ngn/customers").send(body));
+      const second = await mainnet(request(app).post("/ngn/customers").send(body));
+      const third = await mainnet(request(app).post("/ngn/customers").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(third.status).toBe(429);
+      expect(third.body.code).toBe("veil_rate_limited");
+    });
+
+    it("returns standard rate-limit headers so clients can back off correctly", async () => {
+      const app = makeRateLimitedApp(1, 100);
+      await mainnet(
+        request(app)
+          .post("/ngn/customers")
+          .send({ customerRef: "u", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" }),
+      );
+      const overLimit = await mainnet(
+        request(app)
+          .post("/ngn/customers")
+          .send({ customerRef: "u", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" }),
+      );
+      expect(overLimit.status).toBe(429);
+      // RateLimit-Limit is sent by standardHeaders:true.
+      expect(overLimit.headers["ratelimit-limit"] ?? overLimit.headers["x-ratelimit-limit"]).toBeDefined();
+    });
+  });
+
+  describe("POST /ngn/customers is rate-limited per reference", () => {
+    it("refuses past the per-reference limit even with IP budget remaining", async () => {
+      // IP limit = 100 (high), ref limit = 1 — so only the per-reference limiter trips.
+      const app = makeRateLimitedApp(100, 1);
+      const body = { customerRef: "same_ref", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" };
+
+      const first = await mainnet(request(app).post("/ngn/customers").send(body));
+      const second = await mainnet(request(app).post("/ngn/customers").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(second.body.code).toBe("veil_rate_limited");
+    });
+
+    it("one abusive caller with many references is caught by the per-IP limit", async () => {
+      // IP limit = 2, ref limit = 100 — the per-IP limit should catch this,
+      // since each request uses a different customerRef.
+      const app = makeRateLimitedApp(2, 100);
+      const makeBody = (ref: string) => ({
+        customerRef: ref, firstName: "A", lastName: "B", email: `${ref}@b.com`, phone: "080",
+      });
+
+      const first = await mainnet(request(app).post("/ngn/customers").send(makeBody("ref1")));
+      const second = await mainnet(request(app).post("/ngn/customers").send(makeBody("ref2")));
+      const third = await mainnet(request(app).post("/ngn/customers").send(makeBody("ref3")));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(third.status).toBe(429);
+      expect(third.body.code).toBe("veil_rate_limited");
+    });
+  });
+
+  describe("POST /ngn/customers/kyc is rate-limited per IP", () => {
+    it("refuses past the per-IP limit with veil_rate_limited, not rate_limited", async () => {
+      const app = makeRateLimitedApp(1, 100);
+      const body = { customerRef: "u", nin: "12345678901" };
+
+      const first = await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+      const second = await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(second.body.code).toBe("veil_rate_limited");
+    });
+
+    it("counts successful KYC requests (the limit protects the provider, not just abuse)", async () => {
+      const app = makeRateLimitedApp(1, 100);
+      const body = { customerRef: "u", nin: "12345678901" };
+
+      await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+      const refused = await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+      expect(refused.status).toBe(429);
+    });
+  });
+
+  describe("POST /ngn/customers/kyc is rate-limited per reference", () => {
+    it("refuses past the per-reference limit even with IP budget remaining", async () => {
+      const app = makeRateLimitedApp(100, 1);
+      const body = { customerRef: "same_ref", nin: "12345678901" };
+
+      const first = await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+      const second = await mainnet(request(app).post("/ngn/customers/kyc").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(second.body.code).toBe("veil_rate_limited");
+    });
+  });
+
+  describe("POST /ngn/onramp/orders is rate-limited per IP", () => {
+    it("refuses past the per-IP limit with veil_rate_limited", async () => {
+      const app = makeRateLimitedApp(2, 100);
+      const body = {
+        customerRef: "u",
+        amountStableCoin: 1,
+        walletAddress: G_ADDRESS,
+        rate: 290,
+        coin: "xlm",
+      };
+
+      const first = await mainnet(request(app).post("/ngn/onramp/orders").send(body));
+      const second = await mainnet(request(app).post("/ngn/onramp/orders").send(body));
+      const third = await mainnet(request(app).post("/ngn/onramp/orders").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(200);
+      expect(third.status).toBe(429);
+      expect(third.body.code).toBe("veil_rate_limited");
+    });
+  });
+
+  describe("POST /ngn/onramp/orders is rate-limited per reference", () => {
+    it("refuses past the per-reference limit even with IP budget remaining", async () => {
+      const app = makeRateLimitedApp(100, 1);
+      const body = {
+        customerRef: "same_ref",
+        amountStableCoin: 1,
+        walletAddress: G_ADDRESS,
+        rate: 290,
+        coin: "xlm",
+      };
+
+      const first = await mainnet(request(app).post("/ngn/onramp/orders").send(body));
+      const second = await mainnet(request(app).post("/ngn/onramp/orders").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(second.body.code).toBe("veil_rate_limited");
+    });
+  });
+
+  describe("POST /ngn/bills is rate-limited per IP and per reference", () => {
+    it("refuses past the per-IP limit", async () => {
+      const app = makeRateLimitedApp(1, 100);
+      const body = {
+        customerRef: "u",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "080",
+        amountNgn: 500,
+        amountStableCoin: 500 / 290,
+        rate: 290,
+        coin: "xlm",
+        refundAddress: G_ADDRESS,
+      };
+
+      await mainnet(request(app).post("/ngn/bills").send(body));
+      const refused = await mainnet(request(app).post("/ngn/bills").send(body));
+
+      expect(refused.status).toBe(429);
+      expect(refused.body.code).toBe("veil_rate_limited");
+    });
+
+    it("refuses past the per-reference limit even with IP budget remaining", async () => {
+      const app = makeRateLimitedApp(100, 1);
+      const body = {
+        customerRef: "same_ref",
+        billCategory: "airtime",
+        provider: "MTN",
+        customerId: "080",
+        amountNgn: 500,
+        amountStableCoin: 500 / 290,
+        rate: 290,
+        coin: "xlm",
+        refundAddress: G_ADDRESS,
+      };
+
+      const first = await mainnet(request(app).post("/ngn/bills").send(body));
+      const second = await mainnet(request(app).post("/ngn/bills").send(body));
+
+      expect(first.status).toBe(200);
+      expect(second.status).toBe(429);
+      expect(second.body.code).toBe("veil_rate_limited");
+    });
+  });
+
+  describe("our 429 is distinguishable from the provider's 429", () => {
+    it("veil_rate_limited (ours) vs rate_limited (provider's)", async () => {
+      // Provider returns rate_limited when IT is rate-limited.
+      (provisionCustomer as jest.Mock).mockRejectedValue(
+        new LinqError("Rate limit exceeded", 429, "rate_limited"),
+      );
+      // Use the normal (non-rate-limited) app to let the request through to the mock.
+      const normalApp = makeApp();
+      const providerLimited = await mainnet(
+        request(normalApp)
+          .post("/ngn/customers")
+          .send({ customerRef: "u", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" }),
+      );
+      expect(providerLimited.status).toBe(429);
+      // Provider's code is distinct from ours.
+      expect(providerLimited.body.code).toBe("rate_limited");
+
+      // Our rate limiter on a separate tiny-limit app.
+      const app = makeRateLimitedApp(0, 100); // IP limit of 0 = refuses every request
+      const ourLimited = await mainnet(
+        request(app)
+          .post("/ngn/customers")
+          .send({ customerRef: "u", firstName: "A", lastName: "B", email: "a@b.com", phone: "080" }),
+      );
+      expect(ourLimited.status).toBe(429);
+      expect(ourLimited.body.code).toBe("veil_rate_limited");
+    });
   });
 });
