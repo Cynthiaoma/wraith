@@ -178,6 +178,11 @@ rate and one availability probe per client:
 A build that ships only the availability half stays compatible with stage 1 —
 that is the point of staging it this way.
 
+A key is scoped to one network and never expires: once used, it belongs to that
+order for good. Generate a new one per order and resend it only to retry that
+order. A `500` on creation does not mean no order exists, so retry with the
+same key rather than a new one. The details are in [idempotency.md](./idempotency.md).
+
 ## Upgrading
 
 - Orders created before this change have no `id` or token and cannot be read

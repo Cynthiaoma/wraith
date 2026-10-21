@@ -266,13 +266,16 @@ describe("non-JSON error bodies, the same on every rail", () => {
     provider(reply(502, "<html><body><h1>502 Bad Gateway</h1></body></html>"));
     const err = (await run().catch((e: unknown) => e)) as LinqError;
     expect(err.status).toBe(502);
-    expect(err.message).toBe("Linq rejected the request");
+    // A gateway failure is not the request being rejected (W087).
+    expect(err.message).toBe("Linq returned an error without giving a reason (HTTP 502)");
     expect(err.message).not.toContain("<");
   });
 
   it.each(RAILS)("%s refuses a plain-text body too long to be a message", async (_rail, run) => {
     provider(reply(500, "x".repeat(201)));
-    await expect(run()).rejects.toMatchObject({ message: "Linq rejected the request" });
+    await expect(run()).rejects.toMatchObject({
+      message: "Linq returned an error without giving a reason (HTTP 500)",
+    });
   });
 });
 
