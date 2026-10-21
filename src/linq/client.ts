@@ -162,6 +162,7 @@ export async function createOfframpOrder(
     throw new LinqError(
       "Provide exactly one of amountNGN or amountStableCoin",
       400,
+      "invalid_request",
     );
   }
   // One deadline for the attempt AND its retry, so the two budgets add up to

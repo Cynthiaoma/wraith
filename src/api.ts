@@ -72,7 +72,9 @@ const limiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." },
+  // `veil_rate_limited`, not `rate_limited`: this is our limiter, and a rail
+  // client has to tell it apart from the provider's shared limit.
+  message: { error: "Too many requests, please try again later.", code: "veil_rate_limited" },
   // /metrics is exempt: a scrape endpoint that starts 429ing goes blind exactly
   // when load is high enough to matter, which is when you need the graphs.
   skip: (req) => process.env.NODE_ENV === "test" || req.path === "/metrics",
@@ -1107,8 +1109,11 @@ export function createApp(): express.Application {
   );
 
   // ─── 404 handler ─────────────────────────────────────────────────────────
+  // `code` here too: an unmatched path under `/ngn` or `/offramp` is an error
+  // response on those surfaces, and a rail client must not meet a codeless
+  // body at the edge of the API.
   app.use((_req: Request, res: Response) => {
-    res.status(404).json({ error: "Not found" });
+    res.status(404).json({ error: "Not found", code: "not_found" });
   });
 
   // ─── Global error handler ────────────────────────────────────────────────
@@ -1116,7 +1121,9 @@ export function createApp(): express.Application {
     // A deliberately-thrown HttpError carries a message written for the caller,
     // so it keeps its own status and text.
     if (err instanceof HttpError) {
-      return res.status(err.status).json({ error: err.message });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.status >= 500 ? "internal_error" : "invalid_request" });
     }
 
     // Anything else is unhandled, and its message is not ours to show. This
@@ -1128,6 +1135,7 @@ export function createApp(): express.Application {
 
     return res.status(500).json({
       error: "Internal server error",
+      code: "internal_error",
       correlationId,
     });
   });

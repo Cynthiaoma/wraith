@@ -869,7 +869,8 @@ describe("concurrent duplicates", () => {
     const res = await place(app);
 
     expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: "Offramp request failed" });
+    // #287: even our own unexpected failure answers with the one shape.
+    expect(res.body).toEqual({ error: "Offramp request failed", code: "internal_error" });
     expect(res.text).not.toMatch(/Unique constraint|idempotencyKey|P2002/);
   });
 });
