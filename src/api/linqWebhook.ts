@@ -1,17 +1,23 @@
 import express, { Request, Response, Router } from "express";
 
 import { prisma } from "../db";
-import { SIGNATURE_HEADER, parseEvent, verifySignature } from "../linq/webhook";
+import {
+  SIGNATURE_HEADER,
+  parseEvent,
+  resolveEventNetwork,
+  verifySignature,
+} from "../linq/webhook";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
-import { DEFAULT_NETWORK } from "../network";
 
 /**
  * Linq's webhook, for every rail.
  *
  * One endpoint carries offramp, onramp and bill events, and the body does not
- * say which rail an event belongs to — only an `orderId`. So reconciliation is
- * "find the order that id belongs to": the offramp table first, then the NGN
- * one. An id in neither is not ours.
+ * say which rail an event belongs to — only an `orderId` (and, optionally, a
+ * `network`). So reconciliation is "find the order that id belongs to" using
+ * the compound `(network, orderId)` key: the offramp table first, then the NGN
+ * one. An id in neither is not ours. A missing network resolves to the
+ * deployment's configured network; an invalid one is ignored.
  *
  * The bill case is what made this necessary. An onramp delivering XLM shows up
  * on-chain, where the indexer already sees it and the address subscription
@@ -59,10 +65,11 @@ export function createLinqWebhookRouter(): Router {
       res.status(200).json({ ok: true });
 
       try {
-        // Idempotent per event: the update targets a row keyed on the order
-        // id and writes the settled figures. A redelivery of the SAME event
-        // writes the same values a second time, which is a no-op rather than
-        // a double-count (pinned in __tests__/routes/idempotency.test.ts).
+        // Idempotent per event: the update targets a row keyed on
+        // (network, orderId) and writes the settled figures. A redelivery of
+        // the SAME event writes the same values a second time, which is a
+        // no-op rather than a double-count (pinned in
+        // __tests__/routes/idempotency.test.ts).
         // Nothing here creates a row - an event for an order we never placed
         // is not ours to act on.
         //
@@ -70,9 +77,14 @@ export function createLinqWebhookRouter(): Router {
         // of `order.processing` arriving after `order.completed` sets the
         // status back to processing. Nothing is counted twice, but the row
         // reads wrong until the next status poll corrects it.
-        const network = DEFAULT_NETWORK;
-        const existing = await prisma.offrampOrder.findFirst({
-          where: { orderId: event.orderId },
+        const network = resolveEventNetwork(event);
+        if (!network) {
+          console.warn(`[linq] webhook for order ${event.orderId} names an invalid network`);
+          return;
+        }
+
+        const existing = await prisma.offrampOrder.findUnique({
+          where: { network_orderId: { network, orderId: event.orderId } },
         });
         if (!existing) {
           // Not an offramp order — try the onramp/bill table before giving up.
@@ -82,9 +94,7 @@ export function createLinqWebhookRouter(): Router {
         }
 
         await prisma.offrampOrder.update({
-          where: {
-            network_orderId: { network: existing.network ?? network, orderId: event.orderId },
-          },
+          where: { network_orderId: { network, orderId: event.orderId } },
           data: {
             status: event.status ?? event.event,
             ...(event.amountStableCoin != null
