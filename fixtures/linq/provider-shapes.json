@@ -1,0 +1,110 @@
+{
+  "description": "Pinned response shapes for the Linq B2B endpoints that the fake provider implements. The fake must serve responses whose fields are a superset of the shapes listed here — any field present in a shape must appear in the fake's response with the same type. Provenance is recorded per endpoint so a reviewer can trace each shape back to its source.",
+  "updatedOn": "2026-10-21",
+  "note": "No NIN, no API key, no real customer reference appears anywhere in this file. Fake identifiers use the prefix 'fake_' or obviously synthetic values.",
+  "endpoints": {
+    "POST /b2b/customers": {
+      "provenance": "documented",
+      "documentedOn": "2026-10-14",
+      "source": "Linq B2B API reference, /b2b/customers provisioning endpoint. The response shape was cross-checked against observed behaviour logged during W090 testing (2026-10-14): a first call returns created:true and the reference, a repeat call returns created:false and the reference unchanged.",
+      "successShape": {
+        "customerRef": "string",
+        "verified": "boolean",
+        "created": "boolean"
+      },
+      "examples": {
+        "created": {
+          "customerRef": "fake_ref_new_0001",
+          "verified": false,
+          "created": true
+        },
+        "alreadyExists": {
+          "customerRef": "fake_ref_existing_0001",
+          "verified": false,
+          "created": false
+        }
+      }
+    },
+    "POST /b2b/offramp": {
+      "provenance": "documented",
+      "documentedOn": "2026-10-14",
+      "source": "Linq B2B API reference, /b2b/offramp order creation endpoint. Fields id, walletAddress, coinType, coin, chain, amountStableCoin, amountNGN, rate, currency and status are all documented. The idempotencyKey deduplication behaviour (same key → same order) was documented and additionally confirmed in W090 testing.",
+      "successShape": {
+        "id": "string",
+        "walletAddress": "string",
+        "coinType": "string",
+        "coin": "string",
+        "chain": "string",
+        "amountStableCoin": "number",
+        "amountNGN": "number",
+        "rate": "number",
+        "currency": "string",
+        "status": "string"
+      },
+      "examples": {
+        "initiated": {
+          "id": "fake-offramp-order-id-0001",
+          "walletAddress": "GDEPOSIT0000000000000000000000000000000000000000000000000000",
+          "coinType": "usdc",
+          "coin": "usdc",
+          "chain": "stellar",
+          "amountStableCoin": 50,
+          "amountNGN": 75000,
+          "rate": 1500,
+          "currency": "NGN",
+          "status": "initiated"
+        }
+      }
+    },
+    "POST /b2b/onramp": {
+      "provenance": "documented",
+      "documentedOn": "2026-10-14",
+      "source": "Linq B2B API reference, /b2b/onramp order creation endpoint. Fields orderId, customerRef, accountNumber, bankName, accountName, amountNgn, amountStableCoin, fee, expiresAt and status are all documented. No idempotencyKey is sent or documented; each request is a new order.",
+      "successShape": {
+        "orderId": "string",
+        "customerRef": "string",
+        "accountNumber": "string",
+        "bankName": "string",
+        "accountName": "string",
+        "amountNgn": "number",
+        "amountStableCoin": "number",
+        "fee": "number",
+        "expiresAt": "string",
+        "status": "string"
+      },
+      "examples": {
+        "pending": {
+          "orderId": "fake-onramp-order-id-0001",
+          "customerRef": "fake_ref_0001",
+          "accountNumber": "0000000001",
+          "bankName": "Fake Bank",
+          "accountName": "Fake Collections",
+          "amountNgn": 15000,
+          "amountStableCoin": 10,
+          "fee": 0,
+          "expiresAt": "2099-01-01T00:00:00.000Z",
+          "status": "pending"
+        }
+      }
+    },
+    "POST /b2b/bills/pay": {
+      "provenance": "documented",
+      "documentedOn": "2026-10-14",
+      "source": "Linq B2B API reference, /b2b/bills/pay bill payment endpoint. Fields id, customerRef, wallet and status are documented. No idempotencyKey is sent or documented; each request is a new order.",
+      "successShape": {
+        "id": "string",
+        "customerRef": "string",
+        "wallet": "string",
+        "status": "string"
+      },
+      "examples": {
+        "initiated": {
+          "id": "fake-bill-order-id-0001",
+          "customerRef": "fake_ref_0001",
+          "wallet": "GBILLDEPOSIT00000000000000000000000000000000000000000000000",
+          "status": "initiated"
+        }
+      }
+    }
+  }
+}
