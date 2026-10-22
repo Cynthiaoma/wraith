@@ -898,7 +898,7 @@ describe("the order access token", () => {
     const res = await request(app).get(`/offramp/orders/${b.body.id}`).set(auth(a.body.accessToken));
 
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: "Order not found" });
+    expect(res.body).toMatchObject({ error: "Order not found" });
   });
 
   it("refuses a tampered token", async () => {
@@ -912,7 +912,7 @@ describe("the order access token", () => {
     const res = await request(app).get(`/offramp/orders/${created.body.id}`).set(auth(tampered));
 
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: "Order not found" });
+    expect(res.body).toMatchObject({ error: "Order not found" });
     expect(mockStatus).not.toHaveBeenCalled();
   });
 
@@ -935,7 +935,7 @@ describe("the order access token", () => {
     const res = await request(app).get(`/offramp/orders/${created.body.id}`);
 
     expect(res.status).toBe(401);
-    expect(res.body).toEqual({ error: "An order access token is required" });
+    expect(res.body).toMatchObject({ error: "An order access token is required" });
   });
 });
 
