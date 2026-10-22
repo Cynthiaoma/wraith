@@ -245,8 +245,28 @@ export function setIndexerUnstarted(network: Network, reason: string): void {
  * Restarts scheduled after a loop crashed, kept so a case that started a loop
  * can cancel it again. Without this the chain outlives whoever called
  * `startAllIndexers` — see `_resetIndexerLoops`.
+ *
+ * At most one per network. A Set of timers let two crashes of one network (two
+ * `startAllIndexers` calls, say) queue two restarts, and the second would start
+ * a loop that superseded the first moments after it began.
  */
-const restartTimers = new Set<NodeJS.Timeout>();
+const restartTimers = new Map<Network, NodeJS.Timeout>();
+
+function cancelRestart(net: Network): void {
+  const timer = restartTimers.get(net);
+  if (timer) clearTimeout(timer);
+  restartTimers.delete(net);
+}
+
+function cancelAllRestarts(): void {
+  for (const timer of restartTimers.values()) clearTimeout(timer);
+  restartTimers.clear();
+}
+
+/** Test-only: networks with a crash-restart waiting to fire. */
+export function _pendingRestarts(): Network[] {
+  return [...restartTimers.keys()];
+}
 
 /**
  * Networks `startAllIndexers` was asked to keep running.
@@ -262,8 +282,7 @@ const requestedNetworks = new Set<Network>();
 /** Test-only: drops loop state and unstarted records between cases. */
 export function _resetIndexerLoops(): void {
   for (const loop of loops.values()) loop.stopped = true;
-  for (const timer of restartTimers) clearTimeout(timer);
-  restartTimers.clear();
+  cancelAllRestarts();
   requestedNetworks.clear();
   loops.clear();
   unstartedNetworks.clear();
@@ -278,8 +297,10 @@ export function _resetIndexerLoops(): void {
  */
 export function stopIndexerLoops(): void {
   for (const loop of loops.values()) loop.stopped = true;
-  for (const timer of restartTimers) clearTimeout(timer);
-  restartTimers.clear();
+  cancelAllRestarts();
+  // Dropped too, so a loop that rejects on its way out reads as deliberately
+  // stopped (see `requestedNetworks`) and schedules nothing new.
+  requestedNetworks.clear();
 }
 
 /**
@@ -665,11 +686,12 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
       if (loops.get(net)?.stopped) return;
       if (!requestedNetworks.has(net)) return;
       console.error(`[indexer/${net}] loop crashed, restarting in 10s:`, err);
+      cancelRestart(net);
       const timer = setTimeout(() => {
-        restartTimers.delete(timer);
-        if (!loops.get(net)?.stopped) run(net);
+        restartTimers.delete(net);
+        if (!loops.get(net)?.stopped && requestedNetworks.has(net)) run(net);
       }, 10_000);
-      restartTimers.add(timer);
+      restartTimers.set(net, timer);
       // Unref'd, because a restart wait is not a reason to keep a process
       // alive — the API listening is. Held to the event loop, this chain is
       // immortal: the first crashed loop reschedules itself forever, and
@@ -679,6 +701,9 @@ export function startAllIndexers(networks: Network[] = enabledNetworks()): Netwo
   };
 
   for (const net of runnable) requestedNetworks.add(net);
+  // A restart still waiting for a network started here would otherwise fire
+  // and start a second loop for it.
+  for (const net of runnable) cancelRestart(net);
   for (const net of runnable) run(net);
   return runnable;
 }
