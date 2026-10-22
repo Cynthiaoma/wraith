@@ -65,6 +65,10 @@ export function assertOnrampNetwork(network: string): void {
     throw new LinqError(
       "Buying with naira is only available on mainnet. Linq has no test environment, so this would move real money against a test wallet.",
       400,
+      // Our refusal, not the provider's: without a code of its own this 400
+      // falls through to the generic `provider_rejected` fallback, which would
+      // send a client's testnet-session branch the wrong way.
+      "mainnet_only",
     );
   }
 }

@@ -183,7 +183,7 @@ function firstString(...values: unknown[]): string | undefined {
 
 function apiKey(): string {
   const key = process.env.LINQ_API_KEY?.trim();
-  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500);
+  if (!key) throw new LinqError("LINQ_API_KEY is not configured", 500, "not_configured");
   return key;
 }
 
@@ -283,12 +283,12 @@ async function attempt<T>(
     const waited = Date.now() - startedAt;
     if (err instanceof Error && err.name === "AbortError") {
       console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
-      throw withTransport(new LinqError("Linq did not respond in time", 504), "timeout");
+      throw withTransport(new LinqError("Linq did not respond in time", 504, "provider_timeout"), "timeout");
     }
     console.warn(
       `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    throw withTransport(new LinqError("Could not reach Linq", 502), "unreachable");
+    throw withTransport(new LinqError("Could not reach Linq", 502, "provider_unreachable"), "unreachable");
   } finally {
     clearTimeout(timer);
   }
@@ -299,7 +299,7 @@ async function attempt<T>(
   try {
     parsed = text ? JSON.parse(text) : {};
   } catch {
-    if (response.ok) throw new LinqError("Linq returned a response we could not read", 502);
+    if (response.ok) throw new LinqError("Linq returned a response we could not read", 502, "provider_error");
     // Not JSON. A short plain-text body usually *is* the reason — "Rate limit
     // exceeded, please wait", "NIN already used" — and discarding it left the
     // KYC screen with nothing to say. An HTML page is a document, not a
@@ -362,7 +362,7 @@ export async function linqCall<T>(path: string, options: LinqCallOptions = {}): 
   for (let tried = 0; ; tried++) {
     const remaining = deadline - Date.now();
     if (remaining <= 0) {
-      throw withTransport(new LinqError("Linq did not respond in time", 504), "timeout");
+      throw withTransport(new LinqError("Linq did not respond in time", 504, "provider_timeout"), "timeout");
     }
 
     try {
