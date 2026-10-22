@@ -778,8 +778,29 @@ export const offrampOrderStatusResponseSchema = z.object({
   source: z.enum(["live", "cache"]),
 });
 
-export const offrampErrorResponseSchema = z.object({
-  error: z.string(),
+/**
+ * The one error shape both money rails answer with (#287).
+ *
+ * `code` is the stable, machine-readable half — snake_case and never renamed,
+ * so installed clients can branch on it — and `error` is prose for a person.
+ * A provider code passes through verbatim; when the provider sends none,
+ * wraith assigns one of its own fallbacks (`rate_limited`,
+ * `provider_rejected`, `provider_error`), so `code` is never absent on the
+ * rails. The full catalogue is documented in `docs/ngn-rails.md`.
+ */
+export const railErrorResponseSchema = z.object({
+  error: z.string().openapi({
+    description:
+      "Prose for a person. Never branch on it — it changes when the provider rewords an error.",
+  }),
+  code: z.string().openapi({
+    description:
+      "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+    example: "coin_not_available",
+  }),
+  retryAfterSeconds: z.number().optional().openapi({
+    description: "On a provider 429 only: how long the shared limit asks you to wait.",
+  }),
 });
 
 // ─── GET /fees ──────────────────────────────────────────────────────────────

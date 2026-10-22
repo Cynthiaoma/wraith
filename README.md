@@ -106,11 +106,16 @@ PORT=3000
 docker compose up -d db
 ```
 
-### 4. Run database migrations
+### 4. Create the schema
 
 ```bash
-npx prisma migrate dev --name init
+npm run db:push
 ```
+
+This is the same guarded convergence the service runs on startup. The committed
+migrations under `prisma/migrations/` are a change history, not an init script,
+and are not applied by startup — see
+[docs/drift-recovery.md](docs/drift-recovery.md) for why, with the evidence.
 
 ### 5. Seed the database (optional)
 
@@ -532,7 +537,8 @@ last_indexed_ledger{network="mainnet"} 5842100
 | `last_indexed_ledger` | gauge | `network` | Highest committed ledger. Against the chain tip, this is lag. |
 | `db_query_duration_seconds` | histogram | `operation` | Duration of instrumented DB operations, failures included. |
 | `http_requests_total` | counter | `method`, `route`, `status` | HTTP requests served. `route` is the Express route *pattern*, never the raw URL, so addresses never become label values; an unmatched request reports `route="unknown"`. |
-| `http_request_duration_seconds` | histogram | `method`, `route` | HTTP latency, 5 ms to 10 s. No `status` label — the split is rarely worth the extra series. |
+| `http_request_duration_seconds` | histogram | `method`, `route` | HTTP latency, 5 ms to 40 s. No `status` label — the split is rarely worth the extra series. |
+| `provider_request_duration_seconds` | histogram | `provider`, `operation`, `outcome` | Time inside a payment-provider call (Linq), separately from the request. Same unit and buckets as the HTTP histogram: `http_request_duration_seconds - provider_request_duration_seconds` is wraith's own time. `operation` is a fixed list (`offramp_order`, `bill_pay`, …), never a URL. |
 
 Standard `process_*` and `nodejs_*` metrics are exported alongside these.
 

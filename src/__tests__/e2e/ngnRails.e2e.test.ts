@@ -49,7 +49,7 @@ jest.mock("../../linq/ngnOrders", () => ({
 jest.mock("../../db", () => ({
   prisma: {
     offrampOrder: {
-      findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     ngnOrder: {
       findFirst: jest.fn().mockResolvedValue(null),

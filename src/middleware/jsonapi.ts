@@ -176,13 +176,62 @@ export function jsonApiMiddleware(req: Request, res: Response, next: NextFunctio
   next();
 }
 
-function transformToJsonApi(body: unknown, endpoint: string, statusCode: number = 200): JsonApiResponse {
+/**
+ * Fields the stale-read middleware in `api.ts` writes onto a body.
+ *
+ * That middleware is mounted after this one, so its `res.json` wrapper runs
+ * first and hands us a body that already carries them. Left alone they were
+ * dropped from every collection (the transforms below only read the list) and
+ * filed as resource attributes everywhere else, so a JSON:API client could not
+ * tell it was reading data from an outage. They describe the response, not a
+ * resource, which in JSON:API is what `meta` is for.
+ */
+const STALE_READ_KEYS = ["stale", "as_of_ledger", "indexer_running"] as const;
+
+const TOP_LEVEL_KEYS = new Set(["data", "errors", "meta", "links", "jsonapi", "included"]);
+
+/** A body that is already a JSON:API document is passed on as it is. */
+function isJsonApiDocument(body: Record<string, unknown>): boolean {
+  const keys = Object.keys(body);
+  if (keys.length === 0) return false;
+  if (!keys.every((k) => TOP_LEVEL_KEYS.has(k))) return false;
+  return "data" in body || Array.isArray(body.errors);
+}
+
+export function transformToJsonApi(body: unknown, endpoint: string, statusCode: number = 200): JsonApiResponse {
   if (!body || typeof body !== "object") {
     return { data: null };
   }
 
-  const bodyRecord = body as Record<string, unknown>;
+  if (Array.isArray(body)) {
+    const type = determineResourceType(endpoint, body) ?? "generic";
+    return {
+      data: body
+        .filter((item): item is Record<string, unknown> => !!item && typeof item === "object" && !Array.isArray(item))
+        .map((item) => recordToResource(item, type)),
+    };
+  }
 
+  const record = body as Record<string, unknown>;
+  if (isJsonApiDocument(record)) return record as JsonApiResponse;
+
+  const staleMeta: Record<string, unknown> = {};
+  const bodyRecord: Record<string, unknown> = { ...record };
+  for (const key of STALE_READ_KEYS) {
+    if (key in bodyRecord) {
+      staleMeta[key] = bodyRecord[key];
+      delete bodyRecord[key];
+    }
+  }
+
+  const doc = transformBody(bodyRecord, endpoint, statusCode);
+  if (Object.keys(staleMeta).length > 0 && !doc.errors) {
+    doc.meta = { ...(doc.meta ?? {}), ...staleMeta };
+  }
+  return doc;
+}
+
+function transformBody(bodyRecord: Record<string, unknown>, endpoint: string, statusCode: number): JsonApiResponse {
   if (bodyRecord.transfers && Array.isArray(bodyRecord.transfers)) {
     return transformTransfersResponse(bodyRecord as { transfers: Record<string, unknown>[]; total?: number; hasMore?: boolean; limit?: number; offset?: number; nextCursor?: string | null }, endpoint) as unknown as JsonApiResponse;
   }

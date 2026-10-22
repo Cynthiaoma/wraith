@@ -132,7 +132,17 @@ describe("submitCustomerKyc parses each fixture", () => {
 
     expect(err).toBeInstanceOf(LinqError);
     expect(err.status).toBe(c.provider.status);
-    expect(err.code).toBe(c.veil.body.code);
+    // The parser carries the provider's code verbatim — and nothing else.
+    // When the provider sent none it stays undefined *here*; the stable
+    // fallback in `c.veil.body.code` is assigned later by `sendLinqError` at
+    // the route, which the next describe pins end to end (#287). Asserting
+    // the fallback here would say the parser invented a reason nobody sent.
+    const providerBody = c.provider.body as { code?: unknown } | undefined;
+    const providerCode =
+      typeof providerBody?.code === "string" && providerBody.code.trim()
+        ? providerBody.code
+        : undefined;
+    expect(err.code).toBe(providerCode);
     expect(err.message).toBe(c.veil.body.error);
     expect(JSON.stringify(err, Object.getOwnPropertyNames(err))).not.toContain(TEST_NIN);
   });
@@ -185,16 +195,29 @@ describe("a body with no readable reason", () => {
   // a fallback that said nothing, and was wrong each time.
   const IMPLIES_A_CAUSE = /\bnin\b|identity|verif|format|already|name|customer|invalid|mismatch/i;
 
-  it.each(asRows(byKind("no_code")))("%s: no code, and no implied cause", async (_id, c) => {
-    stubProvider(c);
-    const res = await postKyc();
+  // #287: the `code` key may never be absent — a client cannot branch on a
+  // shape that sometimes has one. When the provider sent none, wraith assigns
+  // its own stable fallback from the status: a 4xx stays a 4xx
+  // (`provider_rejected`), a 5xx is owned as 502 (`provider_error`).
+  const fallbackCode = (status: number) => (status >= 500 ? "provider_error" : "provider_rejected");
 
-    expect(res.body).not.toHaveProperty("code");
-    expect(res.body.error).not.toMatch(IMPLIES_A_CAUSE);
-    for (const code of Object.keys(DOCUMENTED)) expect(res.body.error).not.toContain(code);
-    // A provider failure is not the request being turned down.
-    if (c.provider.status >= 500) expect(res.body.error).not.toMatch(/reject/i);
-  });
+  it.each(asRows(byKind("no_code")))(
+    "%s: a stable wraith fallback code, and no implied cause",
+    async (_id, c) => {
+      stubProvider(c);
+      const res = await postKyc();
+
+      expect(res.body.code).toBe(fallbackCode(c.provider.status));
+      // Not a documented provider code: that would claim a reason nobody sent.
+      expect(Object.keys(DOCUMENTED)).not.toContain(res.body.code);
+      expect(res.body.error).not.toMatch(IMPLIES_A_CAUSE);
+      for (const code of Object.keys(DOCUMENTED)) expect(res.body.error).not.toContain(code);
+      // A provider failure is not the request being turned down.
+      if (c.provider.status >= 500) expect(res.body.error).not.toMatch(/reject/i);
+      // Exactly the one error shape — nothing else can ride along.
+      expect(Object.keys(res.body).sort()).toEqual(["code", "error"]);
+    },
+  );
 });
 
 describe("the route's own NIN shape check", () => {

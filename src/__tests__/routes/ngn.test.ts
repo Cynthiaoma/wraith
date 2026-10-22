@@ -365,7 +365,7 @@ describe("provider error codes", () => {
     expect(res.body.error).toBe("NIN already used");
   });
 
-  it("omits code entirely when the provider sent none", async () => {
+  it("answers a provider failure with no code with a stable wraith code", async () => {
     (submitCustomerKyc as jest.Mock).mockRejectedValue(new LinqError("Something broke", 400));
 
     const res = await mainnet(
@@ -373,8 +373,12 @@ describe("provider error codes", () => {
     );
 
     expect(res.status).toBe(400);
-    expect(res.body).not.toHaveProperty("code");
+    // #287: the key is never absent. A 4xx the provider gave no code for is
+    // `provider_rejected`; the message still passes through for the prose.
+    expect(res.body.code).toBe("provider_rejected");
     expect(res.body.error).toBe("Something broke");
+    // The one error shape, with nothing else riding along.
+    expect(Object.keys(res.body).sort()).toEqual(["code", "error"]);
   });
 });
 

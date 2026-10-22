@@ -239,36 +239,136 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Bad Request */
+                /** @description Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only) */
                 400: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
-                /** @description Not Found */
+                /** @description Not Found (code: not_found) */
                 404: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
-                /** @description Internal Server Error */
+                /** @description Rate limited (veil_rate_limited ours / rate_limited the provider's) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Internal Server Error (code: internal_error) */
                 500: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Naira rails not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Provider did not respond in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2693,7 +2793,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2771,6 +2879,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2789,7 +2916,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2800,7 +2935,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2881,6 +3024,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2899,7 +3061,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2910,7 +3080,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2979,6 +3157,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2997,7 +3194,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3008,7 +3213,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3134,6 +3347,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -3152,7 +3384,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3163,7 +3403,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3233,6 +3481,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Order access token required (code: unauthorized) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Not Found */
                 404: {
                     headers: {
@@ -3241,6 +3508,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3262,7 +3548,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3273,7 +3567,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };

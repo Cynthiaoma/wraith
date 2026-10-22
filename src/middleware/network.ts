@@ -13,6 +13,7 @@
  */
 import type { Request, Response, NextFunction } from "express";
 import { currentNetwork, enabledNetworks, isNetwork, NETWORKS, type Network } from "../network";
+import { sendError } from "../api/errors";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -76,19 +77,24 @@ export function networkMiddleware(req: Request, res: Response, next: NextFunctio
   const normalised = raw.trim().toLowerCase();
 
   if (!isNetwork(normalised)) {
-    res.status(400).json({
-      error: `Invalid network: "${raw}". Valid values: ${NETWORKS.join(", ")}.`,
-    });
+    sendError(
+      res,
+      400,
+      "invalid_network",
+      `Invalid network: "${raw}". Valid values: ${NETWORKS.join(", ")}.`,
+    );
     return;
   }
 
   const enabled = enabledNetworks();
   if (!enabled.includes(normalised)) {
-    res.status(400).json({
-      error:
-        `Network "${normalised}" is not enabled on this deployment. ` +
+    sendError(
+      res,
+      400,
+      "network_not_enabled",
+      `Network "${normalised}" is not enabled on this deployment. ` +
         `Enabled networks: ${enabled.join(", ")}.`,
-    });
+    );
     return;
   }
 

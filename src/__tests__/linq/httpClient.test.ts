@@ -286,11 +286,13 @@ describe("per-call options", () => {
     const limited = reply(429, "Rate limit exceeded", { "retry-after": "0" });
 
     let stub = provider(limited);
-    await expect(linqCall("/x")).rejects.toMatchObject({ status: 429 });
+    await expect(linqCall("/x", { operation: "offramp_rate" })).rejects.toMatchObject({ status: 429 });
     expect(stub).toHaveBeenCalledTimes(1);
 
     stub = provider(limited);
-    await expect(linqCall("/x", { rateLimitRetries: 2 })).rejects.toMatchObject({ status: 429 });
+    await expect(
+      linqCall("/x", { rateLimitRetries: 2, operation: "offramp_rate" }),
+    ).rejects.toMatchObject({ status: 429 });
     expect(stub).toHaveBeenCalledTimes(3);
   });
 
@@ -350,7 +352,11 @@ describe("per-call options", () => {
 
     it("never waits past the deadline it was given", async () => {
       silentProvider();
-      const pending = linqCall("/x", { timeoutMs: 30_000, deadline: Date.now() + 2_000 }).catch((e) => e);
+      const pending = linqCall("/x", {
+        timeoutMs: 30_000,
+        deadline: Date.now() + 2_000,
+        operation: "onramp_kyc",
+      }).catch((e) => e);
       await jest.advanceTimersByTimeAsync(2_001);
       await expect(pending).resolves.toMatchObject({ status: 504 });
     });
