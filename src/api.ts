@@ -19,7 +19,7 @@ import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
 import { createSearchRouter } from "./routes/search";
-import { cacheMiddleware } from "./cache/redis";
+import { cacheMiddleware, cacheStatus } from "./cache/redis";
 import {
   hostFnQuerySchema,
   nftOwnerParamsSchema,
@@ -525,6 +525,7 @@ export function createApp(): express.Application {
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
           networks: byNetwork,
+          cache: cacheStatus(),
         });
       } else {
         res.setHeader("X-Data-Stale", "true");
@@ -546,6 +547,7 @@ export function createApp(): express.Application {
           // usually true of one chain only, and the top-level nulls above
           // cannot say which.
           networks: byNetwork,
+          cache: cacheStatus(),
         });
       }
     } catch (err) {

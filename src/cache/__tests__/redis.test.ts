@@ -3,6 +3,9 @@ import express, { Request, Response } from "express";
 import {
   cacheMiddleware,
   cacheConfigFromEnv,
+  cacheStatus,
+  getCacheClient,
+  setCacheClient,
   defaultKeyFn,
   RedisCache,
   type CacheClient,
@@ -285,5 +288,66 @@ describe("cacheConfigFromEnv", () => {
     });
     expect(cfg.redisUrl).toBe("redis://example:6379");
     expect(cfg.keyPrefix).toBe("x:");
+  });
+});
+
+// ── #322: a missing Redis is explicit, never fatal, and reported truthfully ──
+describe("cache without REDIS_URL", () => {
+  afterEach(() => setCacheClient(null));
+
+  it("does not fall back to a localhost Redis that production does not have", () => {
+    expect(cacheConfigFromEnv({ CACHE_ENABLED: "true" }).redisUrl).toBe("");
+  });
+
+  it("builds no client, throws nothing, and passes requests through", async () => {
+    const errorSpy = jest.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const config = cacheConfigFromEnv({ CACHE_ENABLED: "true" });
+      expect(() => getCacheClient(config)).not.toThrow();
+      expect(getCacheClient(config)).toBeNull();
+      // Said once, not once per request.
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+
+      const app = express();
+      app.get("/x", cacheMiddleware({ ttlMs: 1000, config }), (_req: Request, res: Response) => {
+        res.json({ ok: true });
+      });
+      const res = await request(app).get("/x");
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ ok: true });
+      expect(res.headers["x-cache"]).toBeUndefined();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("cacheStatus", () => {
+  afterEach(() => setCacheClient(null));
+
+  it("reports disabled when CACHE_ENABLED is off", () => {
+    expect(cacheStatus(cacheConfigFromEnv({}))).toEqual({
+      enabled: false,
+      state: "disabled",
+      serving: false,
+    });
+  });
+
+  it("reports unconfigured, not serving, when enabled without REDIS_URL", () => {
+    expect(cacheStatus(cacheConfigFromEnv({ CACHE_ENABLED: "true" }))).toEqual({
+      enabled: true,
+      state: "unconfigured",
+      serving: false,
+    });
+  });
+
+  it("reports serving only when a client is actually ready", () => {
+    const config = cacheConfigFromEnv({ CACHE_ENABLED: "true", REDIS_URL: "redis://example:6379" });
+    setCacheClient(new FakeRedis(), "connecting");
+    expect(cacheStatus(config)).toEqual({ enabled: true, state: "connecting", serving: false });
+    setCacheClient(new FakeRedis(), "error");
+    expect(cacheStatus(config)).toEqual({ enabled: true, state: "error", serving: false });
+    setCacheClient(new FakeRedis());
+    expect(cacheStatus(config)).toEqual({ enabled: true, state: "ready", serving: true });
   });
 });

@@ -8,10 +8,16 @@ import type { Redis } from "ioredis";
  * of queries thousands of times an hour for identical query strings. A small
  * Redis layer with a per-route TTL collapses those into a single cache hit.
  *
- * Caching is **off by default**. Set `CACHE_ENABLED=true` (and optionally
- * `REDIS_URL`) to turn it on. When disabled — or when Redis is unreachable — the
- * middleware degrades to a transparent pass-through so the API never depends on
- * the cache being up.
+ * Caching is **off by default**, and optional by design. Set `CACHE_ENABLED=true`
+ * and `REDIS_URL` to turn it on. When disabled, when `REDIS_URL` is missing, or
+ * when Redis is unreachable, the middleware degrades to a transparent
+ * pass-through so the API never depends on the cache being up.
+ *
+ * Nothing security-relevant lives here. Rate limiting is express-rate-limit's
+ * in-process store and idempotency is a unique index in Postgres, so neither
+ * becomes a no-op when Redis is absent. Only the response cache for
+ * `/assets/popular` and `/search` does, and it says so on `/status` (see
+ * `cacheStatus`) rather than pretending a `redis://localhost:6379` exists.
  *
  * Clients can force a fresh response with the `X-No-Cache` header: the cached
  * value is ignored on read but the fresh response is still written back, so the
@@ -31,6 +37,7 @@ export interface CacheClient {
 
 export interface CacheConfig {
   enabled: boolean;
+  /** Empty when `REDIS_URL` is unset: there is no default host to guess at. */
   redisUrl: string;
   /** Prefix applied to every key, namespacing this app's entries. */
   keyPrefix: string;
@@ -39,7 +46,10 @@ export interface CacheConfig {
 export function cacheConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CacheConfig {
   return {
     enabled: env.CACHE_ENABLED === "true" || env.CACHE_ENABLED === "1",
-    redisUrl: env.REDIS_URL ?? "redis://localhost:6379",
+    // No localhost fallback. A production host has no Redis on localhost, so
+    // defaulting to one turned "not configured" into an endless reconnect loop
+    // that looked, from the outside, like a cache that was merely slow.
+    redisUrl: env.REDIS_URL?.trim() ?? "",
     keyPrefix: env.CACHE_KEY_PREFIX ?? "wraith:cache:",
   };
 }
@@ -47,6 +57,35 @@ export function cacheConfigFromEnv(env: NodeJS.ProcessEnv = process.env): CacheC
 // ── Lazy singleton client ─────────────────────────────────────────────────────
 
 let sharedClient: CacheClient | null = null;
+
+/** What the cache is actually doing, as reported on `/status`. */
+export type CacheState =
+  /** CACHE_ENABLED is not set: pass-through on purpose. */
+  | "disabled"
+  /** CACHE_ENABLED is set but REDIS_URL is not: pass-through, and a config bug. */
+  | "unconfigured"
+  /** Enabled; no client has been built yet (no cached route has been hit). */
+  | "idle"
+  | "connecting"
+  | "ready"
+  /** The client reported an error and has not reconnected since: pass-through. */
+  | "error";
+
+let clientState: CacheState = "idle";
+let warnedUnconfigured = false;
+
+export interface CacheStatus {
+  enabled: boolean;
+  state: CacheState;
+  /** True only when responses are really being served from and written to Redis. */
+  serving: boolean;
+}
+
+export function cacheStatus(config: CacheConfig = cacheConfigFromEnv()): CacheStatus {
+  if (!config.enabled) return { enabled: false, state: "disabled", serving: false };
+  if (!config.redisUrl) return { enabled: true, state: "unconfigured", serving: false };
+  return { enabled: true, state: clientState, serving: clientState === "ready" };
+}
 
 /**
  * Returns the process-wide Redis client, constructing it on first use. Returns
@@ -58,23 +97,42 @@ let sharedClient: CacheClient | null = null;
 export function getCacheClient(config: CacheConfig = cacheConfigFromEnv()): CacheClient | null {
   if (!config.enabled) return null;
   if (sharedClient) return sharedClient;
+  if (!config.redisUrl) {
+    // Not fatal, at boot or ever: the cache is optional. Said once, loudly,
+    // because CACHE_ENABLED=true without a URL is a deployment mistake.
+    if (!warnedUnconfigured) {
+      warnedUnconfigured = true;
+      console.error("[cache] CACHE_ENABLED is set but REDIS_URL is not; caching is off.");
+    }
+    return null;
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const IORedis = require("ioredis") as { default?: new (url: string) => Redis } & (new (url: string) => Redis);
   const Ctor = IORedis.default ?? IORedis;
   const redis = new Ctor(config.redisUrl);
+  clientState = "connecting";
+  redis.on("ready", () => {
+    clientState = "ready";
+  });
   // A failed connection must never crash the process — log once and let the
   // middleware's try/catch fall through to the origin handler.
   redis.on("error", (err: Error) => {
+    clientState = "error";
     console.error("[cache] redis error:", err.message);
+  });
+  redis.on("end", () => {
+    clientState = "error";
   });
   sharedClient = redis as unknown as CacheClient;
   return sharedClient;
 }
 
 /** Test seam: inject a fake client (or reset with `null`). */
-export function setCacheClient(client: CacheClient | null): void {
+export function setCacheClient(client: CacheClient | null, state?: CacheState): void {
   sharedClient = client;
+  clientState = state ?? (client ? "ready" : "idle");
+  warnedUnconfigured = false;
 }
 
 // ── Cache primitive ───────────────────────────────────────────────────────────

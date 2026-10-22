@@ -110,8 +110,13 @@ function amountSchema(max: number) {
  * the same thing". Amounts are normalised numerically so "50" and "50.00" match.
  * HMAC with the provider key, which is never stored beside the row, because a
  * plain hash of a ten-digit account number can be reversed by trying them all.
+ *
+ * Returns null rather than minting without a key. `createHmac` accepts an empty
+ * one, and an HMAC keyed with "" is a plain hash anyone can recompute, which is
+ * exactly the reversal described above. The router's `isConfigured` gate makes
+ * that unreachable today; this keeps it unreachable if the gate ever moves.
  */
-function requestFingerprint(r: {
+export function requestFingerprint(r: {
   amountNGN?: unknown;
   amountStableCoin?: unknown;
   bankAccount: string;
@@ -119,9 +124,13 @@ function requestFingerprint(r: {
   accountName: string;
   refundAddress: unknown;
   walletAddress: string;
-}): string {
+}): string | null {
+  const key = process.env.LINQ_API_KEY;
+  // Checked trimmed, as `isConfigured` does, but the key itself is used as-is:
+  // trimming it would change every fingerprint already stored.
+  if (!key?.trim()) return null;
   const amount = (v: unknown) => (v == null ? "" : String(Number(v)));
-  return createHmac("sha256", process.env.LINQ_API_KEY ?? "")
+  return createHmac("sha256", key)
     .update(
       JSON.stringify([
         amount(r.amountNGN),
@@ -508,6 +517,10 @@ export function createOfframpRouter(
       refundAddress,
       walletAddress,
     });
+    if (requestHash === null) {
+      res.status(503).json({ error: "Offramp is not configured on this deployment" });
+      return;
+    }
     const replayOf = { walletAddress, ...parsedAmounts, requestHash };
 
     try {
