@@ -742,9 +742,9 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getOnrampStatus(customerRef, req.params.orderId));
+      res.json(await getOnrampStatus(customerRef, req.params.orderId as string));
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);
@@ -840,9 +840,9 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getBillStatus(customerRef, req.params.orderId));
+      res.json(await getBillStatus(customerRef, req.params.orderId as string));
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);
