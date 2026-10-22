@@ -348,10 +348,6 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
-                            /** @enum {string} */
-                            network?: "testnet" | "mainnet";
                             lastIndexedLedger: number | null;
                             latestLedger: number | null;
                             lagLedgers: number | null;
@@ -370,6 +366,19 @@ export interface paths {
                                     [key: string]: unknown;
                                 };
                             };
+                            /** @enum {string} */
+                            status: "healthy" | "degraded";
+                            dependencies: {
+                                name: string;
+                                /** @enum {string} */
+                                status: "ok" | "degraded" | "down" | "unknown";
+                                /** Format: date-time */
+                                lastCheckedAt: string | null;
+                                /** Format: date-time */
+                                lastOkAt: string | null;
+                                latencyMs: number | null;
+                                detail: string | null;
+                            }[];
                         } & {
                             [key: string]: unknown;
                         };
@@ -2319,7 +2328,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
+                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
                     amount?: string | null;
                 };
                 header?: never;
