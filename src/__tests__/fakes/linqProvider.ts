@@ -70,6 +70,11 @@ export interface FakeLinq {
   readonly unhandled: FakeRequest[];
   /** Apply `fault` to the next request to `path`, then behave normally. */
   failNext(path: string, fault: Fault): void;
+  /**
+   * Make the next response to `path` arrive after `delayMs`, like a slow but
+   * healthy provider. In-process only; nothing leaves the test.
+   */
+  delayNext(path: string, delayMs: number): void;
   /** How many requests reached `path`. */
   callsTo(path: string): number;
   /** Put the real `fetch` back. */
@@ -96,6 +101,7 @@ export function installFakeLinq(): FakeLinq {
   const requests: FakeRequest[] = [];
   const unhandled: FakeRequest[] = [];
   const faults = new Map<string, Fault[]>();
+  const delays = new Map<string, number[]>();
 
   // ── The provider's behaviour, one belief per endpoint ─────────────────────
 
@@ -206,6 +212,9 @@ export function installFakeLinq(): FakeLinq {
     const request = { method, path: url.pathname };
     requests.push(request);
 
+    const delay = delays.get(url.pathname)?.shift();
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
+
     const handler = routes[`${method} ${url.pathname}`];
     if (!handler) {
       unhandled.push(request);
@@ -237,6 +246,9 @@ export function installFakeLinq(): FakeLinq {
     unhandled,
     failNext(path, fault) {
       faults.set(path, [...(faults.get(path) ?? []), fault]);
+    },
+    delayNext(path, delayMs) {
+      delays.set(path, [...(delays.get(path) ?? []), delayMs]);
     },
     callsTo(path) {
       return requests.filter((r) => r.path === path).length;
