@@ -1,7 +1,7 @@
 import express, { Request, Response, NextFunction } from "express";
-import cors from "cors";
 import rateLimit from "express-rate-limit";
 import { jsonApiMiddleware } from "./middleware/jsonapi";
+import { createCorsMiddleware } from "./middleware/cors";
 import { queryHostFnLogs } from "./indexer/host-fn-log";
 import { queryTransfers, queryAllTransfers, queryByTxHash, querySummary, queryNftTransfers, getNftOwner, getNftMetadata, getLastIndexedLedger, prisma } from "./db";
 import { getLatestLedger } from "./rpc";
@@ -19,7 +19,7 @@ import { createGraphQLMiddleware } from "./graphql/server";
 import { createPopularAssetsRouter } from "./routes/assets/popular";
 import { createExportsRouter } from "./routes/exports";
 import { createSearchRouter } from "./routes/search";
-import { cacheMiddleware } from "./cache/redis";
+import { cacheMiddleware, cacheStatus } from "./cache/redis";
 import {
   hostFnQuerySchema,
   nftOwnerParamsSchema,
@@ -72,7 +72,9 @@ const limiter = rateLimit({
   max: parseInt(process.env.RATE_LIMIT_MAX ?? "60", 10),
   standardHeaders: true,
   legacyHeaders: false,
-  message: { error: "Too many requests, please try again later." },
+  // `veil_rate_limited`, not `rate_limited`: this is our limiter, and a rail
+  // client has to tell it apart from the provider's shared limit.
+  message: { error: "Too many requests, please try again later.", code: "veil_rate_limited" },
   // /metrics is exempt: a scrape endpoint that starts 429ing goes blind exactly
   // when load is high enough to matter, which is when you need the graphs.
   skip: (req) => process.env.NODE_ENV === "test" || req.path === "/metrics",
@@ -138,8 +140,6 @@ export function createApp(): express.Application {
   // Render's X-Forwarded-For, nothing further back.
   app.set("trust proxy", 1);
 
-  app.use(cors());
-
   // ─── HTTP metrics middleware ──────────────────────────────────────────────
   // First in the chain, deliberately: mounted below networkMiddleware and the
   // rate limiter it would never see the requests those two reject, so a 429
@@ -180,6 +180,20 @@ export function createApp(): express.Application {
     next();
   });
 
+  // ─── CORS, per surface ─────────────────────────────────────────────────────
+  // One `cors()` for the whole app answered every request with
+  // `Access-Control-Allow-Origin: *`. That is right for the public read API
+  // and was never a decision for the routes that create orders. Each surface
+  // now has its own policy, and `src/middleware/cors.ts` is where that table
+  // lives — it says which surfaces are deliberately open and why, and it
+  // reads the allow-list from `CORS_ALLOWED_ORIGINS`, so a new client is an
+  // environment change rather than a change to this file.
+  //
+  // Below the metrics middleware on purpose: a request refused for its origin
+  // is a request we answered, and it should be counted like any other. Above
+  // every router, so no surface is left uncovered, and above `express.json()`,
+  // so a refused request never has its body parsed.
+  app.use(createCorsMiddleware());
 
   // BEFORE express.json(). Linq signs the raw request body, so a parser that
   // consumes and re-serialises it makes every signature unverifiable - the
@@ -525,6 +539,7 @@ export function createApp(): express.Application {
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
           networks: byNetwork,
+          cache: cacheStatus(),
         });
       } else {
         res.setHeader("X-Data-Stale", "true");
@@ -546,6 +561,7 @@ export function createApp(): express.Application {
           // usually true of one chain only, and the top-level nulls above
           // cannot say which.
           networks: byNetwork,
+          cache: cacheStatus(),
         });
       }
     } catch (err) {
@@ -1107,8 +1123,11 @@ export function createApp(): express.Application {
   );
 
   // ─── 404 handler ─────────────────────────────────────────────────────────
+  // `code` here too: an unmatched path under `/ngn` or `/offramp` is an error
+  // response on those surfaces, and a rail client must not meet a codeless
+  // body at the edge of the API.
   app.use((_req: Request, res: Response) => {
-    res.status(404).json({ error: "Not found" });
+    res.status(404).json({ error: "Not found", code: "not_found" });
   });
 
   // ─── Global error handler ────────────────────────────────────────────────
@@ -1116,7 +1135,9 @@ export function createApp(): express.Application {
     // A deliberately-thrown HttpError carries a message written for the caller,
     // so it keeps its own status and text.
     if (err instanceof HttpError) {
-      return res.status(err.status).json({ error: err.message });
+      return res
+        .status(err.status)
+        .json({ error: err.message, code: err.status >= 500 ? "internal_error" : "invalid_request" });
     }
 
     // Anything else is unhandled, and its message is not ours to show. This
@@ -1128,6 +1149,7 @@ export function createApp(): express.Application {
 
     return res.status(500).json({
       error: "Internal server error",
+      code: "internal_error",
       correlationId,
     });
   });

@@ -54,7 +54,7 @@ jest.mock("../../api/ngn", () => ({
   ngnPerCoin: jest.fn(),
 }));
 
-import { createOfframpRouter, __resetCoinlessRateLog } from "../../api/offramp";
+import { createOfframpRouter, requestFingerprint, __resetCoinlessRateLog } from "../../api/offramp";
 import { networkMiddleware } from "../../middleware/network";
 import { LinqError, createOfframpOrder, getOfframpStatus } from "../../linq/client";
 import { ngnPerCoin } from "../../api/ngn";
@@ -869,7 +869,132 @@ describe("concurrent duplicates", () => {
     const res = await place(app);
 
     expect(res.status).toBe(500);
-    expect(res.body).toEqual({ error: "Offramp request failed" });
+    // #287: even our own unexpected failure answers with the one shape.
+    expect(res.body).toEqual({ error: "Offramp request failed", code: "internal_error" });
     expect(res.text).not.toMatch(/Unique constraint|idempotencyKey|P2002/);
+  });
+});
+
+// #319: the order token and the keyed fingerprint. Assertions compare tokens as
+// booleans, so a failure reports true/false rather than printing a credential.
+describe("the order access token", () => {
+  it("reads its own order", async () => {
+    const app = makeApp();
+    const created = await place(app);
+
+    const res = await request(app)
+      .get(`/offramp/orders/${created.body.id}`)
+      .set(auth(created.body.accessToken));
+
+    expect(res.status).toBe(200);
+    expect(res.body.id === created.body.id).toBe(true);
+  });
+
+  it("does not open another order", async () => {
+    const app = makeApp();
+    const a = await place(app);
+    const b = await place(app, { idempotencyKey: "key-2" });
+
+    const res = await request(app).get(`/offramp/orders/${b.body.id}`).set(auth(a.body.accessToken));
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: "Order not found" });
+  });
+
+  it("refuses a tampered token", async () => {
+    const app = makeApp();
+    const created = await place(app);
+    const token: string = created.body.accessToken;
+    const last = token.charAt(token.length - 1);
+    const tampered = token.slice(0, -1) + (last === "A" ? "B" : "A");
+    expect(tampered === token).toBe(false);
+
+    const res = await request(app).get(`/offramp/orders/${created.body.id}`).set(auth(tampered));
+
+    expect(res.status).toBe(404);
+    expect(res.body).toMatchObject({ error: "Order not found" });
+    expect(mockStatus).not.toHaveBeenCalled();
+  });
+
+  it("refuses a token that is not the right shape at all", async () => {
+    const app = makeApp();
+    const created = await place(app);
+
+    const res = await request(app)
+      .get(`/offramp/orders/${created.body.id}`)
+      .set(auth(`${created.body.accessToken}x`));
+
+    expect(res.status).toBe(401);
+    expect(res.headers["www-authenticate"]).toBe("Bearer");
+  });
+
+  it("refuses a missing token", async () => {
+    const app = makeApp();
+    const created = await place(app);
+
+    const res = await request(app).get(`/offramp/orders/${created.body.id}`);
+
+    expect(res.status).toBe(401);
+    expect(res.body).toMatchObject({ error: "An order access token is required" });
+  });
+});
+
+describe("the keyed fingerprint without a key", () => {
+  const request0 = {
+    amountStableCoin: 50,
+    bankAccount: "0123456789",
+    bankCode: "058",
+    accountName: "Ada Lovelace",
+    refundAddress: undefined,
+    walletAddress: WALLET,
+  };
+
+  afterEach(() => {
+    process.env.LINQ_API_KEY = "test-key";
+  });
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+    ["whitespace", "   "],
+  ])("refuses to mint when the key is %s", (_label, value) => {
+    if (value === undefined) delete process.env.LINQ_API_KEY;
+    else process.env.LINQ_API_KEY = value;
+
+    expect(requestFingerprint(request0)).toBeNull();
+  });
+
+  it("mints a 64-hex fingerprint once a key is set", () => {
+    expect(requestFingerprint(request0)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("never reaches the provider or the database when the key is missing", async () => {
+    process.env.LINQ_API_KEY = "";
+    const app = makeApp();
+
+    const res = await place(app);
+
+    expect(res.status).toBe(503);
+    expect(mockCreate).not.toHaveBeenCalled();
+    expect(mockRowCreate).not.toHaveBeenCalled();
+    expect(rows).toHaveLength(0);
+  });
+});
+
+describe("a replayed order creation", () => {
+  it("creates exactly one order however many times it is replayed", async () => {
+    const app = makeApp();
+    const first = await place(app);
+    const replays = [await place(app), await place(app), await place(app)];
+
+    expect(first.status).toBe(201);
+    for (const r of replays) {
+      expect(r.status).toBe(200);
+      expect(r.body.replayed).toBe(true);
+      expect(r.body.id === first.body.id).toBe(true);
+    }
+    expect(mockCreate).toHaveBeenCalledTimes(1);
+    expect(mockRowCreate).toHaveBeenCalledTimes(1);
+    expect(rows).toHaveLength(1);
   });
 });

@@ -36,10 +36,25 @@ export const httpRequestsTotal = new Counter({
 });
 
 /**
+ * Histogram buckets for request and provider latency, in seconds.
+ *
+ * The naira rails budget 35 seconds for a whole provider operation
+ * (`TOTAL_BUDGET_MS` in src/linq/http.ts), retries and waits included. Buckets
+ * therefore run past that to 40s: a call that spends its entire budget must
+ * land in a finite bucket, not only `+Inf`, or the slow tail — exactly the
+ * requests this metric exists for — is invisible.
+ *
+ * Shared by {@link httpRequestDurationSeconds} and
+ * {@link providerRequestDurationSeconds} so a dashboard can overlay them
+ * directly: same unit, same boundaries.
+ */
+export const LATENCY_BUCKETS_SECONDS = [
+  0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 15, 20, 25, 30, 35, 40,
+];
+
+/**
  * HTTP request latency by method and route pattern.
  *
- * Buckets run from 5ms to 10s: below 5ms nothing here is worth alerting on,
- * and past 10s the request has already failed for whatever is waiting on it.
  * The route label uses the Express route pattern, never the raw path.
  * /metrics is excluded from its own histogram.
  */
@@ -47,7 +62,32 @@ export const httpRequestDurationSeconds = new Histogram({
   name: "http_request_duration_seconds",
   help: "HTTP request latency in seconds, by method and route pattern",
   labelNames: ["method", "route"] as const,
-  buckets: [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10],
+  buckets: LATENCY_BUCKETS_SECONDS,
+  registers: [registry],
+});
+
+/**
+ * Time spent inside a payment-provider call, separately from the request.
+ *
+ * `http_request_duration_seconds` says a request took twelve seconds; this
+ * says how many of them were Linq. Same unit and bucket boundaries, so a
+ * dashboard can compare the two directly — and, per route, the difference is
+ * the time wraith spent itself:
+ *
+ *   sum by (route) (rate(http_request_duration_seconds_sum[5m]))
+ *     - sum by (operation) (rate(provider_request_duration_seconds_sum[5m]))
+ *
+ * Labels are a fixed vocabulary: `provider` is "linq", `operation` is a
+ * `LinqOperation` constant from src/linq/http.ts ("offramp_order",
+ * "bill_pay", …) and `outcome` is success/error/timeout. Never a path, an order id, a customer
+ * reference or a provider message — an unbounded label makes /metrics grow
+ * until it cannot be scraped, exactly when failures are piling up.
+ */
+export const providerRequestDurationSeconds = new Histogram({
+  name: "provider_request_duration_seconds",
+  help: "Time spent inside payment-provider calls, by provider, operation and outcome",
+  labelNames: ["provider", "operation", "outcome"] as const,
+  buckets: LATENCY_BUCKETS_SECONDS,
   registers: [registry],
 });
 

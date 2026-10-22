@@ -55,7 +55,7 @@ import {
   offrampOrderResponseSchema,
   offrampOrderParamsSchema,
   offrampOrderStatusResponseSchema,
-  offrampErrorResponseSchema,
+  railErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
   feeReportQuerySchema,
@@ -118,7 +118,14 @@ registry.registerPath({
       description: "OK",
       content: { "application/json": { schema: ngnCustomerStatusResponseSchema } },
     },
-    ...commonErrorResponses,
+    // Rail error shape (#287): every failure on /ngn carries `code`.
+    400: { description: "Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    404: { description: "Not Found (code: not_found)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    429: { description: "Rate limited (veil_rate_limited ours / rate_limited the provider's)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    500: { description: "Internal Server Error (code: internal_error)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    502: { description: "Provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
+    503: { description: "Naira rails not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
+    504: { description: "Provider did not respond in time", content: { "application/json": { schema: railErrorResponseSchema } } },
   },
 });
 
@@ -484,8 +491,9 @@ registry.registerPath({
 
 const internalErrorResponses = {
   ...commonErrorResponses,
-  502: { description: "Payout provider error", content: { "application/json": { schema: offrampErrorResponseSchema } } },
-  503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: offrampErrorResponseSchema } } },
+  429: { description: "Rate limited (this deployment's or the provider's — the `code` says which)", content: { "application/json": { schema: railErrorResponseSchema } } },
+  502: { description: "Payout provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
+  503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
 };
 
 registry.registerPath({
@@ -504,7 +512,7 @@ registry.registerPath({
     ...commonErrorResponses,
     // No 502: nothing here reaches the provider. 503 is the answer a client
     // hides its cash-out CTA on, so it is the one that has to be documented.
-    503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: offrampErrorResponseSchema } } },
+    503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
   },
 });
 
@@ -580,6 +588,7 @@ registry.registerPath({
   request: { params: offrampOrderParamsSchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampOrderStatusResponseSchema } } },
+    401: { description: "Order access token required (code: unauthorized)", content: { "application/json": { schema: railErrorResponseSchema } } },
     ...internalErrorResponses,
   },
 });

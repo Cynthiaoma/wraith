@@ -106,6 +106,11 @@ export interface BillOrderResponse {
  * Nothing is vended until the deposit arrives — this call only reserves the
  * order and locks the rate. The user then sends `amountStableCoin` of `coin`
  * to the returned `wallet`, and Linq vends automatically on confirmation.
+ *
+ * **Not idempotent**, for the same reason as `createOnrampOrder`: no key is
+ * sent, but a 5xx or dropped connection is retried, so a lost answer becomes a
+ * second order. Nothing is vended without a deposit and the user is shown only
+ * the second `wallet`, so the orphan is never paid. See docs/idempotency.md.
  */
 export async function payBill(params: PayBillParams): Promise<BillOrderResponse> {
   const {
@@ -141,6 +146,7 @@ export async function payBill(params: PayBillParams): Promise<BillOrderResponse>
       call<BillOrderResponse>("/b2b/bills/pay", {
         method: "POST",
         deadline,
+        operation: "bill_pay",
         body: {
           customerRef,
           billCategory,
@@ -182,5 +188,6 @@ export interface BillStatus {
 export function getBillStatus(customerRef: string, orderId: string): Promise<BillStatus> {
   return call<BillStatus>("/b2b/bills/status", {
     query: { customerRef, orderId },
+    operation: "bill_status",
   });
 }

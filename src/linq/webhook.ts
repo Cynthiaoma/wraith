@@ -1,5 +1,7 @@
 import crypto from "node:crypto";
 
+import { currentNetwork, parseNetwork, type Network } from "../network";
+
 /**
  * Verification for Linq's offramp webhooks.
  *
@@ -49,6 +51,12 @@ export function verifySignature(
 export interface LinqWebhookEvent {
   event: "order.processing" | "order.completed" | "order.failed";
   orderId: string;
+  /**
+   * Optional network discriminator. Linq does not currently send one, so it is
+   * absent on real deliveries; when it is absent the deployment's configured
+   * network is used instead.
+   */
+  network?: string;
   amountStableCoin?: number;
   amountNGN?: number;
   amountFormatted?: string;
@@ -57,6 +65,21 @@ export interface LinqWebhookEvent {
   txHash?: string;
   status?: string;
   timestamp?: string;
+}
+
+/**
+ * Resolve the network an event applies to.
+ *
+ * An explicit, valid `network` wins. When the event omits it, the deployment's
+ * configured network is used. An event that names something else is rejected
+ * rather than silently falling back: looking up the wrong network would either
+ * miss the order or, worse, apply the event to a same-id order on another chain.
+ */
+export function resolveEventNetwork(
+  event: Pick<LinqWebhookEvent, "network">,
+): Network | null {
+  if (event.network === undefined) return currentNetwork();
+  return parseNetwork(event.network);
 }
 
 /**

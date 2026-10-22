@@ -30,6 +30,7 @@
  */
 
 import { prisma } from "../db";
+import { resolveEventNetwork } from "./webhook";
 
 export type NgnOrderKind = "onramp" | "bill";
 
@@ -58,8 +59,13 @@ export interface RecordNgnOrderParams {
  * user needs. Failing their request because our bookkeeping failed would turn a
  * placed order into an error message, and they would reasonably place it again.
  *
- * Idempotent on `(network, orderId)`, so a retried delivery or a double-submit
- * updates the row rather than creating a second one.
+ * Idempotent on `(network, orderId)`: recording the same order again updates
+ * its row rather than creating a second one.
+ *
+ * That is idempotency of the *record*, not of the order. A client that submits
+ * the same onramp or bill twice gets two orders from Linq, with two ids, and
+ * so two rows — correctly, because there are two orders. See
+ * docs/idempotency.md.
  */
 export async function recordNgnOrder(params: RecordNgnOrderParams): Promise<void> {
   const {
@@ -158,23 +164,31 @@ export async function findNgnOrder(
 /**
  * Apply a webhook event to an order we placed.
  *
- * Returns false when the order is not ours, so the caller can say so rather
- * than silently succeeding. Nothing here creates a row: an event for an order
- * we never placed is not ours to act on.
+ * Looked up by the compound `(network, orderId)` key. An explicit event
+ * `network` wins; without one the deployment's configured network is used.
+ * Returns false when the network is invalid or the order is not ours, so the
+ * caller can say so rather than silently succeeding. Nothing here creates a
+ * row: an event for an order we never placed is not ours to act on.
  */
 export async function reconcileNgnOrder(event: {
   orderId: string;
+  network?: string;
   status?: string;
   event: string;
   amountStableCoin?: number;
   amountNGN?: number;
   txHash?: string;
 }): Promise<boolean> {
-  const existing = await prisma.ngnOrder.findFirst({ where: { orderId: event.orderId } });
+  const network = resolveEventNetwork(event);
+  if (!network) return false;
+
+  const existing = await prisma.ngnOrder.findUnique({
+    where: { network_orderId: { network, orderId: event.orderId } },
+  });
   if (!existing) return false;
 
   await prisma.ngnOrder.update({
-    where: { network_orderId: { network: existing.network, orderId: event.orderId } },
+    where: { network_orderId: { network, orderId: event.orderId } },
     data: {
       status: event.status ?? event.event,
       ...(event.amountStableCoin != null

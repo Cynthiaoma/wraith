@@ -25,6 +25,8 @@
  * back.
  */
 
+import { providerRequestDurationSeconds } from "../metrics";
+
 const DEFAULT_BASE_URL = "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
 
 /** Read per call, so a test or a redeploy that changes it is honoured. */
@@ -98,7 +100,63 @@ export class LinqError extends Error {
 /** A provider 429 carries how long we should wait before the retry. */
 type RateLimited = LinqError & { retryAfterMs?: number };
 
+/**
+ * How a request failed without an HTTP answer, when it did.
+ *
+ * The status alone cannot say: our own abort and a provider's 504 are both
+ * 504, and "unreachable" and a provider's 502 are both 502. The difference
+ * decides whether a request may be sent again — a NIN check in particular
+ * must not be resent after our own timeout, because the provider may still
+ * be working on the one we sent. Read it with {@link linqTransport}.
+ */
+export type LinqTransport = "timeout" | "unreachable";
+type TransportFailure = LinqError & { transport?: LinqTransport };
+
+function withTransport(err: LinqError, transport: LinqTransport): LinqError {
+  return Object.assign(err, { transport });
+}
+
+/**
+ * `"timeout"` when we gave up waiting, `"unreachable"` when no connection was
+ * made, and undefined when the provider answered (whatever the status).
+ */
+export function linqTransport(err: unknown): LinqTransport | undefined {
+  return err instanceof LinqError ? (err as TransportFailure).transport : undefined;
+}
+
+/**
+ * The finite vocabulary of provider operations, for the latency histogram.
+ *
+ * A union rather than a free string so an operation cannot silently become a
+ * per-order or per-URL label — the cardinality rule that keeps /metrics
+ * scrapeable. Every call site names one; there is no "other" to fall back to,
+ * and adding one is a deliberate act that shows up in a review.
+ */
+export type LinqOperation =
+  | "offramp_rate"
+  | "offramp_verify_bank"
+  | "offramp_trustline"
+  | "offramp_order"
+  | "offramp_status"
+  | "onramp_customer"
+  | "onramp_customer_status"
+  | "onramp_kyc"
+  | "onramp_rate"
+  | "onramp_order"
+  | "onramp_status"
+  | "bill_pay"
+  | "bill_status";
+
+/** How a provider call ended, for the latency histogram's `outcome` label. */
+export type ProviderCallOutcome = "success" | "error" | "timeout";
+
 export interface LinqCallOptions {
+  /**
+   * What this call is, for `provider_request_duration_seconds`. Required: a
+   * default would quietly relabel an unannotated call as "other" and hide
+   * exactly the operation someone forgot to classify.
+   */
+  operation: LinqOperation;
   method?: string;
   /** JSON-encoded when present. Never logged. */
   body?: unknown;
@@ -129,6 +187,25 @@ export interface LinqCallOptions {
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * The message for a failure whose body gave no reason a person could read.
+ *
+ * It says what is known and nothing more. A 4xx is the provider refusing the
+ * request, so "rejected" is simply true; a 5xx is the provider failing, and
+ * calling that a rejection tells the user their request was at fault — a cause
+ * nobody sent. The KYC screens branch on `code`, not on this sentence, so the
+ * sentence must never be the thing that implies one. The status and any code
+ * ride along because they are facts, and they are what diagnoses the next one.
+ * (W087)
+ */
+export function unexplainedFailure(status: number, code?: string): string {
+  if (status >= 400 && status < 500) {
+    return code ? `Linq rejected the request (${code})` : "Linq rejected the request";
+  }
+  const detail = code ? `HTTP ${status}, ${code}` : `HTTP ${status}`;
+  return `Linq returned an error without giving a reason (${detail})`;
+}
 
 /** The first of `values` that is a non-empty string, trimmed, or undefined. */
 function firstString(...values: unknown[]): string | undefined {
@@ -240,12 +317,12 @@ async function attempt<T>(
     const waited = Date.now() - startedAt;
     if (err instanceof Error && err.name === "AbortError") {
       console.warn(`[linq] timeout after ${waited}ms calling ${path}`);
-      throw new LinqError("Linq did not respond in time", 504);
+      throw withTransport(new LinqError("Linq did not respond in time", 504, "provider_timeout"), "timeout");
     }
     console.warn(
       `[linq] unreachable after ${waited}ms calling ${path}: ${err instanceof Error ? err.message : String(err)}`,
     );
-    throw new LinqError("Could not reach Linq", 502);
+    throw withTransport(new LinqError("Could not reach Linq", 502), "unreachable");
   } finally {
     clearTimeout(timer);
   }
@@ -266,7 +343,7 @@ async function attempt<T>(
     const message =
       plain && plain.length <= MAX_PLAIN_MESSAGE && !/^\s*</.test(plain)
         ? plain
-        : "Linq rejected the request";
+        : unexplainedFailure(response.status);
     throw Object.assign(
       new LinqError(message, response.status, undefined, retryAfterSeconds(response)),
       { retryAfterMs: retryAfterWaitMs(response) },
@@ -287,7 +364,7 @@ async function attempt<T>(
     // is what reaches the user, and a bare fallback leaves them a guess.
     const message =
       firstString(body["message"], body["error"], body["msg"], body["detail"], body["reason"]) ??
-      (code ? `Linq rejected the request (${code})` : "Linq rejected the request");
+      unexplainedFailure(response.status, code);
     // Linq names the reference an already-registered identity belongs to.
     const existingCustomerRef = firstString(body["customerRef"], body["customer_ref"]);
     throw Object.assign(
@@ -311,27 +388,49 @@ async function attempt<T>(
  * failure is the caller's to handle; see {@link retryOnProviderFailure} for the
  * one 5xx retry the order-creating calls take.
  */
-export async function linqCall<T>(path: string, options: LinqCallOptions = {}): Promise<T> {
+export async function linqCall<T>(path: string, options: LinqCallOptions): Promise<T> {
   const deadline = options.deadline ?? Date.now() + TOTAL_BUDGET_MS;
   const perAttempt = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const retries = options.rateLimitRetries ?? 0;
 
-  for (let tried = 0; ; tried++) {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) throw new LinqError("Linq did not respond in time", 504);
+  // Timed around the whole operation, retries and provider-mandated waits
+  // included: that is the time this request spent waiting on Linq, which is
+  // what has to be comparable to its total duration. A 429 that waits two
+  // seconds before succeeding is two seconds the provider cost us.
+  const startedAt = process.hrtime.bigint();
+  let outcome: ProviderCallOutcome = "success";
 
-    try {
-      // Never wait past the deadline, even on the first attempt: a call made
-      // late in a shared budget gets what is left of it, not a fresh 15s.
-      return await attempt<T>(path, options, Math.min(perAttempt, remaining));
-    } catch (err) {
-      if (!(err instanceof LinqError) || err.status !== 429 || tried >= retries) throw err;
-      const wait =
-        (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (tried + 1), MAX_RETRY_DELAY_MS);
-      // A wait that would end after the deadline buys nothing; surface the 429.
-      if (Date.now() + wait >= deadline) throw err;
-      await sleep(wait);
+  try {
+    for (let tried = 0; ; tried++) {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw withTransport(new LinqError("Linq did not respond in time", 504, "provider_timeout"), "timeout");
+      }
+
+      try {
+        // Never wait past the deadline, even on the first attempt: a call made
+        // late in a shared budget gets what is left of it, not a fresh 15s.
+        return await attempt<T>(path, options, Math.min(perAttempt, remaining));
+      } catch (err) {
+        if (!(err instanceof LinqError) || err.status !== 429 || tried >= retries) throw err;
+        const wait =
+          (err as RateLimited).retryAfterMs ?? Math.min(1_000 * (tried + 1), MAX_RETRY_DELAY_MS);
+        // A wait that would end after the deadline buys nothing; surface the 429.
+        if (Date.now() + wait >= deadline) throw err;
+        await sleep(wait);
+      }
     }
+  } catch (err) {
+    outcome = linqTransport(err) === "timeout" ? "timeout" : "error";
+    throw err;
+  } finally {
+    // Observed on failure too. A call that spent the full 35 seconds and then
+    // failed is the one an operator most needs to see, and dropping it would
+    // make this histogram describe only the healthy path.
+    providerRequestDurationSeconds.observe(
+      { provider: "linq", operation: options.operation, outcome },
+      Number(process.hrtime.bigint() - startedAt) / 1e9,
+    );
   }
 }
 
@@ -340,8 +439,19 @@ export async function linqCall<T>(path: string, options: LinqCallOptions = {}): 
  *
  * Order creation can fail transiently at the provider — "Wallet generation
  * failed" is it not managing to mint the deposit address. A 4xx is about the
- * request and is never retried. The retry sends the identical body,
- * idempotencyKey included, so the provider can recognise it as the same order.
+ * request and is never retried.
+ *
+ * The retry sends the identical body. Whether that is SAFE depends on the
+ * caller, not on this function, because a 5xx or a dropped connection does not
+ * mean nothing was created — Linq may have done the work and lost the answer:
+ *
+ *  - offramp orders carry an idempotencyKey, and Linq is believed to return the
+ *    original order for a key it has seen. Believed, not documented to us.
+ *  - customers are keyed on customerRef, and Linq returns the existing one.
+ *  - onramp orders and bills carry NO key. A retry here after a lost answer
+ *    places a second, unpaid order; the caller is given the second.
+ *
+ * Wrap nothing new in this without deciding which of those three it is.
  *
  * `deadline` bounds the pair, so the retry cannot double the caller's budget.
  */
