@@ -106,11 +106,16 @@ PORT=3000
 docker compose up -d db
 ```
 
-### 4. Run database migrations
+### 4. Create the schema
 
 ```bash
-npx prisma migrate dev --name init
+npm run db:push
 ```
+
+This is the same guarded convergence the service runs on startup. The committed
+migrations under `prisma/migrations/` are a change history, not an init script,
+and are not applied by startup — see
+[docs/drift-recovery.md](docs/drift-recovery.md) for why, with the evidence.
 
 ### 5. Seed the database (optional)
 
