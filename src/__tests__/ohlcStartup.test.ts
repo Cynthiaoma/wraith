@@ -4,6 +4,9 @@ const mockStartAllIndexers = jest.fn();
 const mockDisconnect = jest.fn().mockResolvedValue(undefined);
 const mockListen = jest.fn();
 
+type MissingObject = { table: string; missingColumns: string[]; tableMissing: boolean };
+const mockMissingSchemaObjects = jest.fn(async (): Promise<MissingObject[]> => []);
+
 jest.mock("dotenv/config", () => ({}));
 jest.mock("http", () => ({ createServer: () => ({ listen: mockListen }) }));
 jest.mock("child_process", () => ({ execSync: jest.fn() }));
@@ -17,8 +20,20 @@ jest.mock("../graphql/subscriptions", () => ({
 }));
 jest.mock("../workers/webhooks", () => ({ startWebhookWorker: jest.fn() }));
 jest.mock("../jobs/retention", () => ({ startPartitionRetentionJob: jest.fn() }));
+jest.mock("../jobs/orderReconciliation", () => ({ startOrderReconciliationJob: jest.fn() }));
 jest.mock("../tokenCache", () => ({ initTokenCache: jest.fn().mockResolvedValue(undefined) }));
 jest.mock("../schemaGuard", () => ({ pushSchema: jest.fn(() => ({ ok: true })) }));
+jest.mock("../schemaState", () => ({
+  auditMigrationHistory: jest.fn(async () => ({
+    historyTablePresent: true,
+    historySchema: "public",
+    appliedCount: 0,
+    failedCount: 0,
+    unrecorded: [],
+    unexpected: [],
+  })),
+  missingSchemaObjects: mockMissingSchemaObjects,
+}));
 jest.mock("../workers/ohlc-refresh", () => ({
   startOhlcRefreshWorker: mockStartOhlcRefreshWorker,
 }));
@@ -29,6 +44,7 @@ describe("OHLC refresh startup wiring", () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
+    mockMissingSchemaObjects.mockResolvedValue([]);
     delete process.env.OHLC_REFRESH_INTERVAL_MS;
     delete process.env.SKIP_INDEXER;
     process.env.NETWORKS = "testnet";
@@ -43,6 +59,7 @@ describe("OHLC refresh startup wiring", () => {
     process.env.SOROBAN_RPC_URL_MAINNET = "https://mainnet.example.invalid";
     signalHandlers.clear();
     jest.spyOn(console, "log").mockImplementation(() => {});
+    jest.spyOn(console, "error").mockImplementation(() => {});
     jest.spyOn(process, "exit").mockImplementation(() => undefined as never);
     jest.spyOn(process, "on").mockImplementation((event, listener) => {
       signalHandlers.set(event, listener as () => Promise<void>);
@@ -123,5 +140,18 @@ describe("OHLC refresh startup wiring", () => {
       mockDisconnect.mock.invocationCallOrder[0],
     );
     expect(process.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("refuses to start when the database is still behind after convergence", async () => {
+    // `db push` reported success, but the verification still cannot find the
+    // column. Serving would mean a route whose insert fails — the outage #277
+    // exists to prevent — so the process must exit instead.
+    mockMissingSchemaObjects.mockResolvedValue([
+      { table: "OfframpOrder", missingColumns: ["requestHash"], tableMissing: false },
+    ]);
+
+    await startService();
+
+    expect(process.exit).toHaveBeenCalledWith(1);
   });
 });

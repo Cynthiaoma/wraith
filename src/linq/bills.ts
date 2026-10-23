@@ -146,6 +146,7 @@ export async function payBill(params: PayBillParams): Promise<BillOrderResponse>
       call<BillOrderResponse>("/b2b/bills/pay", {
         method: "POST",
         deadline,
+        operation: "bill_pay",
         body: {
           customerRef,
           billCategory,
@@ -187,5 +188,6 @@ export interface BillStatus {
 export function getBillStatus(customerRef: string, orderId: string): Promise<BillStatus> {
   return call<BillStatus>("/b2b/bills/status", {
     query: { customerRef, orderId },
+    operation: "bill_status",
   });
 }

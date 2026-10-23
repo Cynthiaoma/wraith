@@ -103,7 +103,10 @@
       "provider": { "status": 500, "body": {} },
       "veil": {
         "status": 502,
-        "body": { "error": "Linq returned an error without giving a reason (HTTP 500)" }
+        "body": {
+          "error": "Linq returned an error without giving a reason (HTTP 500)",
+          "code": "provider_error"
+        }
       }
     },
     {
@@ -112,7 +115,7 @@
       "provider": { "status": 422, "body": { "ok": false } },
       "veil": {
         "status": 422,
-        "body": { "error": "Linq rejected the request" }
+        "body": { "error": "Linq rejected the request", "code": "provider_rejected" }
       }
     },
     {
@@ -121,7 +124,10 @@
       "provider": { "status": 500, "body": { "message": "   ", "code": "" } },
       "veil": {
         "status": 502,
-        "body": { "error": "Linq returned an error without giving a reason (HTTP 500)" }
+        "body": {
+          "error": "Linq returned an error without giving a reason (HTTP 500)",
+          "code": "provider_error"
+        }
       }
     },
     {
@@ -130,7 +136,10 @@
       "provider": { "status": 502, "rawBody": "" },
       "veil": {
         "status": 502,
-        "body": { "error": "Linq returned an error without giving a reason (HTTP 502)" }
+        "body": {
+          "error": "Linq returned an error without giving a reason (HTTP 502)",
+          "code": "provider_error"
+        }
       }
     },
     {
@@ -139,7 +148,10 @@
       "provider": { "status": 502, "rawBody": "<html><body><h1>502 Bad Gateway</h1></body></html>" },
       "veil": {
         "status": 502,
-        "body": { "error": "Linq returned an error without giving a reason (HTTP 502)" }
+        "body": {
+          "error": "Linq returned an error without giving a reason (HTTP 502)",
+          "code": "provider_error"
+        }
       }
     }
   ]

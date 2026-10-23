@@ -35,21 +35,42 @@ import { installFakeLinq, fakeLinq } from "../fakeLinq";
 import { createNgnRouter, __clearNgnRateCache } from "../../api/ngn";
 import { networkMiddleware } from "../../middleware/network";
 import { computeSignature } from "../../linq/webhook";
+import { registry, _resetMetrics } from "../../metrics";
 
 // ─── Database mock ────────────────────────────────────────────────────────────
 // recordNgnOrder and reconcileNgnOrder need a database; the E2E test is about
 // the HTTP / provider interaction, not the persistence layer.
 
-jest.mock("../../linq/ngnOrders", () => ({
-  recordNgnOrder: jest.fn().mockResolvedValue(undefined),
-  findNgnOrder: jest.fn().mockResolvedValue(null),
-  reconcileNgnOrder: jest.fn().mockResolvedValue(true),
-}));
+// Stateful on purpose. A status poll only counts a terminal transition if it
+// finds the row that placing the order wrote, which is what production does: a
+// findNgnOrder that always returned null would let a poll count the same ending
+// on every request, and the counter is a transition counter.
+jest.mock("../../linq/ngnOrders", () => {
+  const rows = new Map<string, Record<string, unknown>>();
+  return {
+    __rows: rows,
+    recordNgnOrder: jest.fn(async (params: Record<string, unknown>) => {
+      const key = String(params.orderId);
+      rows.set(key, {
+        ...(rows.get(key) ?? {}),
+        ...params,
+        amountStableCoin: String(params.amountStableCoin ?? ""),
+        amountNGN: String(params.amountNgn ?? ""),
+        rate: String(params.rate ?? ""),
+        status: String(params.status ?? ""),
+      });
+    }),
+    findNgnOrder: jest.fn(async (_network: string, _customerRef: string, orderId: string) =>
+      rows.get(orderId) ?? null,
+    ),
+    reconcileNgnOrder: jest.fn().mockResolvedValue(true),
+  };
+});
 
 jest.mock("../../db", () => ({
   prisma: {
     offrampOrder: {
-      findFirst: jest.fn().mockResolvedValue(null),
+      findUnique: jest.fn().mockResolvedValue(null),
     },
     ngnOrder: {
       findFirst: jest.fn().mockResolvedValue(null),
@@ -92,6 +113,7 @@ beforeEach(() => {
 
   installFakeLinq();
   __clearNgnRateCache();
+  _resetMetrics();
   jest.clearAllMocks();
 });
 
@@ -174,6 +196,7 @@ describe("full onramp happy path", () => {
     expect(orderRes.body.bankName).toBe("Wema Bank");
     expect(orderRes.body.status).toBe("awaiting payment");
     const orderId: string = orderRes.body.orderId as string;
+    expect(await registry.metrics()).toContain('orders_created_total{rail="onramp"} 1');
 
     // Step 5 — status before settlement
     const statusBefore = await mainnet(
@@ -191,6 +214,9 @@ describe("full onramp happy path", () => {
     );
     expect(statusAfter.status).toBe(200);
     expect(statusAfter.body.status).toBe("completed");
+    expect(await registry.metrics()).toContain(
+      'orders_terminal_total{rail="onramp",status="completed"} 1',
+    );
   });
 
   it("full bill payment flow: provision → KYC → rate → bill order → status → settled", async () => {
@@ -241,6 +267,7 @@ describe("full onramp happy path", () => {
     expect(billRes.body.wallet).toBeTruthy();
     expect(billRes.body.status).toBe("initiated");
     const billOrderId: string = billRes.body.id as string;
+    expect(await registry.metrics()).toContain('orders_created_total{rail="bills"} 1');
 
     // Status
     const statusBefore = await mainnet(
@@ -256,6 +283,9 @@ describe("full onramp happy path", () => {
     );
     expect(statusAfter.status).toBe(200);
     expect(statusAfter.body.status).toBe("completed");
+    expect(await registry.metrics()).toContain(
+      'orders_terminal_total{rail="bills",status="completed"} 1',
+    );
   });
 });
 

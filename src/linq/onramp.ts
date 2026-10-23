@@ -65,6 +65,10 @@ export function assertOnrampNetwork(network: string): void {
     throw new LinqError(
       "Buying with naira is only available on mainnet. Linq has no test environment, so this would move real money against a test wallet.",
       400,
+      // Our refusal, not the provider's: without a code of its own this 400
+      // falls through to the generic `provider_rejected` fallback, which would
+      // send a client's testnet-session branch the wrong way.
+      "mainnet_only",
     );
   }
 }
@@ -146,7 +150,13 @@ export async function provisionCustomer(params: ProvisionCustomerParams): Promis
   const deadline = Date.now() + TOTAL_BUDGET_MS;
   try {
     return await retryOnProviderFailure(
-      () => call<LinqCustomer>("/b2b/customers", { method: "POST", body: params, deadline }),
+      () =>
+        call<LinqCustomer>("/b2b/customers", {
+          method: "POST",
+          body: params,
+          deadline,
+          operation: "onramp_customer",
+        }),
       1_500,
       deadline,
     );
@@ -195,7 +205,10 @@ export interface CustomerStatus {
  * them to spend a rate-limited verification attempt finding out.
  */
 export function getCustomerStatus(customerRef: string): Promise<CustomerStatus> {
-  return call<CustomerStatus>("/b2b/customers/status", { query: { customerRef } });
+  return call<CustomerStatus>("/b2b/customers/status", {
+    query: { customerRef },
+    operation: "onramp_customer_status",
+  });
 }
 
 export interface CustomerKycResult {
@@ -285,6 +298,7 @@ export async function submitCustomerKyc(
       body: { customerRef, nin },
       deadline,
       timeoutMs: KYC_ATTEMPT_TIMEOUT_MS,
+      operation: "onramp_kyc",
     });
 
   for (let attempt = 1; ; attempt++) {
@@ -300,6 +314,7 @@ export async function submitCustomerKyc(
         status = await call<CustomerStatus>("/b2b/customers/status", {
           query: { customerRef },
           deadline,
+          operation: "onramp_customer_status",
         });
       } catch {
         throw err;
@@ -328,7 +343,7 @@ export async function submitCustomerKyc(
  * before creating an order and pass that value through; never reuse one.
  */
 export async function getOnrampRate(): Promise<number> {
-  const value = await call<unknown>("/onramprate", { auth: false });
+  const value = await call<unknown>("/onramprate", { auth: false, operation: "onramp_rate" });
   const rate = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(rate) || rate <= 0) {
     throw new LinqError("Linq returned an unusable onramp rate", 502);
@@ -414,6 +429,7 @@ export async function createOnrampOrder(
       call<OnrampOrderResponse>("/b2b/onramp", {
         method: "POST",
         deadline,
+        operation: "onramp_order",
         body: {
           customerRef,
           amountStableCoin,
@@ -455,5 +471,6 @@ export interface OnrampStatus {
 export function getOnrampStatus(customerRef: string, orderId: string): Promise<OnrampStatus> {
   return call<OnrampStatus>("/b2b/onramp/status", {
     query: { customerRef, orderId },
+    operation: "onramp_status",
   });
 }

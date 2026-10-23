@@ -38,11 +38,19 @@
  * before anything else.
  */
 
+import { billStatusForClients } from "../linq/statusForClients";
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
 import { requestNetwork } from "../middleware/network";
+import {
+  recordOrderCreated,
+  recordOrderTerminal,
+  terminalStatusOf,
+  type OrderRail,
+} from "../metrics";
 import { LinqError } from "../linq/client";
+import { sendError, sendLinqError } from "./errors";
 import { usdPerCoin } from "../linq/coinPrice";
 import {
   assertOnrampNetwork,
@@ -61,40 +69,11 @@ function isConfigured(): boolean {
   return Boolean(process.env.LINQ_API_KEY?.trim());
 }
 
-/**
- * Linq's own message names the real problem — an unverified customer, an
- * unsupported coin — far better than anything we would invent, so it is passed
- * through. A 5xx from them is ours to own as a 502: the caller did nothing
- * wrong.
- */
-function sendLinqError(res: Response, err: unknown): void {
-  if (err instanceof LinqError) {
-    // `code` rides along when Linq sent one — `nin_already_used`,
-    // `customer_not_verified`, and so on. Without it the clients are left
-    // matching on the prose in `error`, which is how a reworded provider
-    // message turns into a user sent down the wrong branch. `error` stays
-    // exactly as it was, so nothing that reads it today breaks.
-    // A 429 is not a failure the user can fix by reading a sentence, and the
-    // clients collapse every rate-limit message into one guess at how long to
-    // wait. `rate_limited` and the provider's own Retry-After replace the
-    // guess: a tester hit this creating an order while the rate reads beside
-    // it were succeeding, which is how we knew it was the provider's limit and
-    // not ours — but only after reading the source.
-    const rateLimited = err.status === 429;
-    if (rateLimited && err.retryAfterSeconds !== undefined) {
-      res.setHeader("Retry-After", String(err.retryAfterSeconds));
-    }
-    res.status(err.status >= 500 ? 502 : err.status).json({
-      error: err.message,
-      ...(err.code ? { code: err.code } : rateLimited ? { code: "rate_limited" } : {}),
-      ...(rateLimited && err.retryAfterSeconds !== undefined
-        ? { retryAfterSeconds: err.retryAfterSeconds }
-        : {}),
-    });
-    return;
-  }
-  res.status(500).json({ error: "Request failed" });
-}
+// Linq's own message names the real problem — an unverified customer, an
+// unsupported coin — far better than anything we would invent, so it is passed
+// through; `./errors.ts` owns how (and behind which `code`) it reaches the
+// client, and a 5xx from the provider is ours to own as a 502: the caller did
+// nothing wrong.
 
 /**
  * When Linq itself is unreachable, answer from our own record rather than
@@ -122,6 +101,55 @@ async function fallbackToRecordedOrder(
 
   res.json({ ...recorded, stale: true, reason: "Linq is unreachable; this is our last known status" });
   return true;
+}
+
+/**
+ * Count a status poll that has just learned an order is finished.
+ *
+ * The recorded row is read before the provider is asked, so this is a
+ * transition counter rather than a poll counter: a wallet polling a completed
+ * order does not increment it again. When there is no row (the database is
+ * down, or the write after creation was lost), the terminal outcome is still
+ * worth knowing and is counted. The row is then refreshed with the new status
+ * so the next poll sees the transition as already counted.
+ */
+async function reconcileTerminalStatus(
+  recorded: Awaited<ReturnType<typeof findNgnOrder>>,
+  params: {
+    network: string;
+    customerRef: string;
+    rail: OrderRail;
+    kind: "onramp" | "bill";
+    status: string;
+  },
+): Promise<void> {
+  const terminal = terminalStatusOf(params.status);
+  if (!terminal) return;
+
+  // With no stored row there is no previous status, so there is no transition to
+  // observe — and nothing to write either, so counting here would count the
+  // same ending again on every later poll. orders_terminal_total is documented
+  // as a transition counter rather than a poll counter, and a wallet polling a
+  // finished order is exactly the case that promise is about.
+  if (!recorded) return;
+  if (terminalStatusOf(recorded.status)) return;
+
+  recordOrderTerminal(params.rail, terminal);
+
+  await recordNgnOrder({
+    network: params.network,
+    kind: params.kind,
+    orderId: recorded.orderId,
+    customerRef: params.customerRef,
+    walletAddress: recorded.walletAddress,
+    coin: recorded.coin,
+    amountStableCoin: recorded.amountStableCoin,
+    amountNgn: recorded.amountNGN,
+    rate: recorded.rate,
+    status: params.status,
+    ...(recorded.billCategory ? { billCategory: recorded.billCategory } : {}),
+    ...(recorded.provider ? { provider: recorded.provider } : {}),
+  });
 }
 
 /**
@@ -159,7 +187,7 @@ async function rejectMispricedRate(
   rate: number,
 ): Promise<boolean> {
   if (!Number.isFinite(rate) || rate <= 0) {
-    res.status(400).json({ error: "rate is required" });
+    sendError(res, 400, "invalid_request", "rate is required");
     return true;
   }
 
@@ -175,10 +203,12 @@ async function rejectMispricedRate(
     // The number is deliberately not echoed as "use this instead": a client
     // that got the rate wrong should re-fetch it, not be handed one to retry
     // with inside an error path.
-    res.status(400).json({
-      error: "That rate is out of date. Fetch the rate again and retry.",
-      code: "rate_out_of_date",
-    });
+    sendError(
+      res,
+      400,
+      "rate_out_of_date",
+      "That rate is out of date. Fetch the rate again and retry.",
+    );
     return true;
   }
   return false;
@@ -252,7 +282,7 @@ export async function ngnPerCoin(coin: OnrampCoin): Promise<number> {
   const [ngnPerUsd, usd] = await Promise.all([ngnPerUsdCached(), usdPerCoin(coin)]);
   const rate = ngnPerUsd * usd;
   if (!Number.isFinite(rate) || rate <= 0) {
-    throw new LinqError("Could not price that asset right now", 502);
+    throw new LinqError("Could not price that asset right now", 502, "provider_error");
   }
   return rate;
 }
@@ -264,7 +294,10 @@ function createLookupLimiter(): RateLimitRequestHandler {
     skipSuccessfulRequests: true,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: "Too many lookups. Wait a minute and try again." },
+    message: {
+      error: "Too many lookups. Wait a minute and try again.",
+      code: "veil_rate_limited",
+    },
   });
 }
 
@@ -497,13 +530,16 @@ function isClassicAddress(value: unknown): value is string {
  */
 function rejectContractAddress(res: Response, address: unknown, field: string): boolean {
   if (typeof address === "string" && address.startsWith("C")) {
-    res.status(400).json({
-      error: `${field} must be the classic account, not the smart-wallet contract. Linq pays by classic operation, which cannot name a contract as its destination.`,
-    });
+    sendError(
+      res,
+      400,
+      "invalid_address",
+      `${field} must be the classic account, not the smart-wallet contract. Linq pays by classic operation, which cannot name a contract as its destination.`,
+    );
     return true;
   }
   if (!isClassicAddress(address)) {
-    res.status(400).json({ error: `${field} must be a valid Stellar account address` });
+    sendError(res, 400, "invalid_address", `${field} must be a valid Stellar account address`);
     return true;
   }
   return false;
@@ -534,7 +570,7 @@ export function createNgnRouter(
   // the secret.
   router.use((_req: Request, res: Response, next: NextFunction) => {
     if (!isConfigured()) {
-      res.status(503).json({ error: "Naira rails are not configured on this deployment" });
+      sendError(res, 503, "not_configured", "Naira rails are not configured on this deployment");
       return;
     }
     next();
@@ -569,9 +605,12 @@ export function createNgnRouter(
       typeof email !== "string" ||
       typeof phone !== "string"
     ) {
-      res.status(400).json({
-        error: "customerRef, firstName, lastName, email and phone are required",
-      });
+      sendError(
+        res,
+        400,
+        "invalid_request",
+        "customerRef, firstName, lastName, email and phone are required",
+      );
       return;
     }
 
@@ -596,7 +635,7 @@ export function createNgnRouter(
   router.get("/customers/status", lookupLimiter, async (req: Request, res: Response) => {
     const customerRef = req.query["customerRef"];
     if (typeof customerRef !== "string" || !customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
+      sendError(res, 400, "invalid_request", "customerRef is required");
       return;
     }
 
@@ -635,7 +674,7 @@ export function createNgnRouter(
     const { customerRef, nin } = req.body ?? {};
 
     if (typeof customerRef !== "string" || typeof nin !== "string") {
-      res.status(400).json({ error: "customerRef and nin are required" });
+      sendError(res, 400, "invalid_request", "customerRef and nin are required");
       return;
     }
     // Shape-checked here so an obvious typo is answered without spending a
@@ -647,7 +686,7 @@ export function createNgnRouter(
     // apps wrote for it was unreachable in practice and a typo fell through to
     // their generic 400 copy. Same condition, same code: not a mapping.
     if (!/^\d{11}$/.test(nin)) {
-      res.status(400).json({ error: "A NIN is 11 digits", code: "invalid_nin_format" });
+      sendError(res, 400, "invalid_nin_format", "A NIN is 11 digits");
       return;
     }
 
@@ -680,7 +719,7 @@ export function createNgnRouter(
     // answer that cannot be mistaken for an answer.
     const resolvedCoin = COINS[String(req.query["coin"] ?? "").toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
+      sendError(res, 400, "invalid_coin", `coin must be one of: ${Object.keys(COINS).join(", ")}`);
       return;
     }
 
@@ -696,7 +735,7 @@ export function createNgnRouter(
     const { customerRef, amountStableCoin, walletAddress, rate, coin } = req.body ?? {};
 
     if (typeof customerRef !== "string") {
-      res.status(400).json({ error: "customerRef is required" });
+      sendError(res, 400, "invalid_request", "customerRef is required");
       return;
     }
     // The crypto is delivered here, so it must be an address Linq can pay.
@@ -707,10 +746,12 @@ export function createNgnRouter(
     // has already taken their money.
     const resolvedCoin = ONRAMP_COINS[String(coin).toLowerCase()];
     if (!resolvedCoin) {
-      res.status(400).json({
-        error: `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
-        code: "coin_not_available",
-      });
+      sendError(
+        res,
+        400,
+        "coin_not_available",
+        `coin must be one of: ${Object.keys(ONRAMP_COINS).join(", ")}`,
+      );
       return;
     }
 
@@ -725,6 +766,7 @@ export function createNgnRouter(
         rate: Number(rate),
         coin: resolvedCoin,
       });
+      recordOrderCreated("onramp");
       res.json(order);
 
       // After the response, deliberately. The user is holding bank details they
@@ -751,15 +793,27 @@ export function createNgnRouter(
   router.get("/onramp/orders/:orderId", lookupLimiter, async (req: Request, res: Response) => {
     const customerRef = String(req.query.customerRef ?? "");
     if (!customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
+      sendError(res, 400, "invalid_request", "customerRef is required");
       return;
     }
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getOnrampStatus(customerRef, req.params.orderId));
+      const network = requestNetwork(req);
+      const [recorded, live] = await Promise.all([
+        findNgnOrder(network, customerRef, req.params.orderId as string).catch(() => null),
+        getOnrampStatus(customerRef, req.params.orderId as string),
+      ]);
+      await reconcileTerminalStatus(recorded, {
+        network,
+        customerRef,
+        rail: "onramp",
+        kind: "onramp",
+        status: live.status,
+      });
+      res.json(live);
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);
@@ -786,18 +840,18 @@ export function createNgnRouter(
       typeof provider !== "string" ||
       typeof customerId !== "string"
     ) {
-      res.status(400).json({ error: "customerRef, provider and customerId are required" });
+      sendError(res, 400, "invalid_request", "customerRef, provider and customerId are required");
       return;
     }
 
     if (!BILL_CATEGORIES.includes(billCategory)) {
-      res.status(400).json({ error: `billCategory must be one of ${BILL_CATEGORIES.join(", ")}` });
+      sendError(res, 400, "invalid_request", `billCategory must be one of ${BILL_CATEGORIES.join(", ")}`);
       return;
     }
 
     const resolvedCoin = COINS[String(coin).toLowerCase()] as BillCoin | undefined;
     if (!resolvedCoin) {
-      res.status(400).json({ error: "coin must be xlm or usdc" });
+      sendError(res, 400, "invalid_coin", "coin must be xlm or usdc");
       return;
     }
 
@@ -823,6 +877,7 @@ export function createNgnRouter(
         coin: resolvedCoin,
         refundAddress,
       });
+      recordOrderCreated("bills");
       res.json(order);
 
       // `customerId` — the phone or meter number — is not passed on. It went to
@@ -849,15 +904,33 @@ export function createNgnRouter(
   router.get("/bills/:orderId", lookupLimiter, async (req: Request, res: Response) => {
     const customerRef = String(req.query.customerRef ?? "");
     if (!customerRef) {
-      res.status(400).json({ error: "customerRef is required" });
+      sendError(res, 400, "invalid_request", "customerRef is required");
       return;
     }
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getBillStatus(customerRef, req.params.orderId));
+      const network = requestNetwork(req);
+      const [recorded, live] = await Promise.all([
+        findNgnOrder(network, customerRef, req.params.orderId as string).catch(() => null),
+        getBillStatus(customerRef, req.params.orderId as string),
+      ]);
+      await reconcileTerminalStatus(recorded, {
+        network,
+        customerRef,
+        rail: "bills",
+        kind: "bill",
+        // Reconcile on the provider's own word, never the translated one: the
+        // ledger and the metrics record what Linq said.
+        status: live.status,
+      });
+      // Translated for the client, raw value kept alongside it. The bills
+      // screen ends on /complete|success|delivered/ and Linq ends a vend as
+      // "settled"/"disbursed", so the untranslated value left a delivered
+      // top-up spinning forever. See billStatusForClients.
+      res.json({ ...live, status: billStatusForClients(live.status), providerStatus: live.status });
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);

@@ -9,7 +9,7 @@
  * hand, so the arithmetic is asserted instead.
  */
 
-import { LinqError, retryOnProviderFailure } from "../client";
+import { LinqError, retryOnProviderFailure } from "../http";
 
 describe("retryOnProviderFailure", () => {
   const serverError = () => new LinqError("Wallet generation failed", 500);

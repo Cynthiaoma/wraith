@@ -7,6 +7,9 @@ import {
   observeDbQuery,
   recordRpcError,
   recordSkippedLedger,
+  recordOrderCreated,
+  recordOrderTerminal,
+  terminalStatusOf,
   registry,
   _resetMetrics,
   httpRequestsTotal,
@@ -153,6 +156,82 @@ describe("Prometheus metrics (#39)", () => {
         .filter((line) => line.startsWith("ledgers_skipped_total{"));
       expect(skipped).toHaveLength(2);
       expect(skipped.join("\n")).not.toMatch(/ledger=|contract=|address=|url=/);
+    });
+  });
+
+  describe("order counters (#271)", () => {
+    it("counts creation per rail", async () => {
+      recordOrderCreated("offramp");
+      recordOrderCreated("onramp");
+      recordOrderCreated("onramp");
+      recordOrderCreated("bills");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('orders_created_total{rail="offramp"} 1');
+      expect(res.text).toContain('orders_created_total{rail="onramp"} 2');
+      expect(res.text).toContain('orders_created_total{rail="bills"} 1');
+    });
+
+    it("counts terminal outcomes by rail and normalised status", async () => {
+      recordOrderTerminal("offramp", "settled");
+      recordOrderTerminal("offramp", "completed");
+      recordOrderTerminal("onramp", "order.failed");
+      recordOrderTerminal("bills", "refunded");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).toContain('orders_terminal_total{rail="offramp",status="settled"} 1');
+      expect(res.text).toContain('orders_terminal_total{rail="offramp",status="completed"} 1');
+      expect(res.text).toContain('orders_terminal_total{rail="onramp",status="failed"} 1');
+      expect(res.text).toContain('orders_terminal_total{rail="bills",status="refunded"} 1');
+    });
+
+    it("does not count in-flight or unrecognised statuses", async () => {
+      recordOrderTerminal("onramp", "awaiting payment");
+      recordOrderTerminal("onramp", "processing");
+      recordOrderTerminal("onramp", "something-new");
+
+      const res = await request(app).get("/metrics");
+
+      expect(res.text).not.toContain("orders_terminal_total{");
+    });
+
+    it("keeps labels bounded to rail and terminal status", async () => {
+      recordOrderTerminal("offramp", "failed");
+
+      const lines = (await registry.metrics())
+        .split("\n")
+        .filter((line) => line.startsWith("orders_terminal_total{"));
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toBe('orders_terminal_total{rail="offramp",status="failed"} 1');
+    });
+
+    it("maps provider and webhook spellings to one terminal vocabulary", () => {
+      expect(terminalStatusOf("order.completed")).toBe("completed");
+      expect(terminalStatusOf("Order Failed")).toBe("failed");
+      expect(terminalStatusOf("expired")).toBe("expired");
+      expect(terminalStatusOf("canceled")).toBe("cancelled");
+      expect(terminalStatusOf("reversed")).toBe("reversed");
+      expect(terminalStatusOf("awaiting payment")).toBeNull();
+    });
+
+    it("does not read a pending status as the ending it names", () => {
+      // These each contain an ending-word. Counting one as terminal would
+      // inflate orders_terminal_total and then suppress the real ending,
+      // because a transition is only recorded when the previous status was
+      // not terminal.
+      expect(terminalStatusOf("refund_pending")).toBeNull();
+      expect(terminalStatusOf("reversal_pending")).toBeNull();
+      expect(terminalStatusOf("cancellation_pending")).toBeNull();
+      expect(terminalStatusOf("disbursement_queued")).toBeNull();
+      expect(terminalStatusOf("settlement_processing")).toBeNull();
+
+      // The endings themselves still map.
+      expect(terminalStatusOf("refunded")).toBe("refunded");
+      expect(terminalStatusOf("order.cancelled")).toBe("cancelled");
+      expect(terminalStatusOf("payment_failed")).toBe("failed");
     });
   });
 
