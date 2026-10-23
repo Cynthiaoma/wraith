@@ -60,10 +60,41 @@ const TERMINAL_MARKERS = [
   "success",
 ];
 
-/** True when Linq will not change this order again. */
+/**
+ * Segments that say the order is still moving, whatever else the status says.
+ * Checked before the terminal markers so a compound status is read by its
+ * tense rather than by whichever word appears in it.
+ */
+const NON_TERMINAL_SEGMENTS = [
+  "pending",
+  "processing",
+  "awaiting",
+  "queued",
+  "initiated",
+  "progress",
+  "not",
+];
+
+/**
+ * True when Linq will not change this order again.
+ *
+ * Matched segment by segment, not by substring. A plain `includes` reads
+ * "incomplete" as "complete" and "refund_pending" as "refund", and because a
+ * terminal status resets the attempt counter, such an order would be re-checked
+ * on every sweep forever and never reach `needsHuman` — the unbounded polling
+ * this job exists to prevent.
+ */
 export function isTerminalOrderStatus(status: string): boolean {
   const normalised = status.trim().toLowerCase();
-  return TERMINAL_MARKERS.some((marker) => normalised.includes(marker));
+  if (!normalised) return false;
+  if (TERMINAL_STATUS_VALUES.includes(normalised)) return true;
+
+  const segments = normalised.split(/[^a-z]+/).filter(Boolean);
+  if (segments.some((segment) => NON_TERMINAL_SEGMENTS.includes(segment))) return false;
+
+  return segments.some((segment) =>
+    TERMINAL_MARKERS.some((marker) => segment === marker || segment.startsWith(marker)),
+  );
 }
 
 export interface ReconcileOrdersOptions {
@@ -321,11 +352,6 @@ export async function runOrderReconciliationJob(
   return result;
 }
 
-/** Backwards-friendly aliases for the same sweep. */
-export const runLinqReconciliationJob = runOrderReconciliationJob;
-export const runNgnReconciliationJob = runOrderReconciliationJob;
-export const reconcileStaleOrders = runOrderReconciliationJob;
-
 export function startOrderReconciliationJob(): NodeJS.Timeout | null {
   const intervalMs = parseInt(
     process.env.ORDER_RECONCILIATION_INTERVAL_MS ?? `${DEFAULT_INTERVAL_MS}`,
@@ -335,10 +361,24 @@ export function startOrderReconciliationJob(): NodeJS.Timeout | null {
     return null;
   }
 
+  // A sweep is slowest exactly when the provider is struggling, which is when
+  // the interval is most likely to fire again before it finishes. Two
+  // overlapping sweeps select the same candidates, because neither has recorded
+  // an attempt yet, so the per-sweep provider-call cap stops bounding anything.
+  let running = false;
   const run = () => {
-    void runOrderReconciliationJob().catch((error) => {
-      console.error("[reconcile] Job failed:", error);
-    });
+    if (running) {
+      console.warn("[reconcile] previous sweep still running, skipping this tick");
+      return;
+    }
+    running = true;
+    void runOrderReconciliationJob()
+      .catch((error) => {
+        console.error("[reconcile] Job failed:", error);
+      })
+      .finally(() => {
+        running = false;
+      });
   };
 
   run();
@@ -346,6 +386,3 @@ export function startOrderReconciliationJob(): NodeJS.Timeout | null {
   timer.unref?.();
   return timer;
 }
-
-export const startLinqReconciliationJob = startOrderReconciliationJob;
-export const startNgnReconciliationJob = startOrderReconciliationJob;

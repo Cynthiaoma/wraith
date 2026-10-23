@@ -285,4 +285,25 @@ describe("order reconciliation sweep", () => {
       expect(isTerminalOrderStatus(status)).toBe(false);
     }
   });
+
+  it("does not read a still-moving status as terminal for a word inside it", () => {
+    // A substring match called every one of these terminal. A terminal status
+    // resets the attempt counter, so each would have been re-checked on every
+    // sweep forever and never reached needsHuman.
+    for (const status of [
+      "incomplete",
+      "refund_pending",
+      "reversal_pending",
+      "cancellation_pending",
+      "awaiting_settlement",
+      "disbursement_queued",
+    ]) {
+      expect(isTerminalOrderStatus(status)).toBe(false);
+    }
+
+    // Still terminal, including compound and upper-case forms.
+    for (const status of ["payment_failed", "successful", "disbursement_complete", "REFUNDED"]) {
+      expect(isTerminalOrderStatus(status)).toBe(true);
+    }
+  });
 });
