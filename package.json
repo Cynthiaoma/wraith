@@ -1,12 +1,12 @@
 {
   "name": "wraith",
   "version": "1.0.0",
-  "description": "Soroban incoming token transfer indexer — fills the Horizon indexing gap for SEP-41/CAP-67 events",
+  "description": "Soroban incoming token transfer indexer \u2014 fills the Horizon indexing gap for SEP-41/CAP-67 events",
   "main": "dist/index.js",
   "scripts": {
-    "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node init && ts-node-dev --respawn --transpile-only src/index.ts",
+    "build": "node init && tsc",
+    "start": "node init && node dist/index.js",
     "test": "jest --runInBand",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "jest --watch",

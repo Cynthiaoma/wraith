@@ -3589,6 +3589,133 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/fees/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Platform fees charged, per UTC day and asset, with the policy behind them
+         * @description Internal endpoint. Not part of the public data API: an operator report over the fee ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description First UTC date to report, YYYY-MM-DD. Defaults to today. */
+                    from?: string | null;
+                    /** @description Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it. */
+                    to?: string | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            network: string;
+                            from: string;
+                            to: string;
+                            /** @description VEIL_FEE_ALARM_PERCENT in force for this report. */
+                            alarmPercent: number;
+                            days: {
+                                date: string;
+                                assets: {
+                                    assetCode: string;
+                                    assetIssuer: string | null;
+                                    quotes: number;
+                                    /** @description Sum of every fee quoted — what clients were told to charge. */
+                                    feesQuoted: string;
+                                    alarms: number;
+                                    policyIds: string[];
+                                    /** @description What the fee destination received in this asset that day, per the index. Null when the asset is not indexed — which is not zero. */
+                                    collected: string | null;
+                                    collectedNote?: string;
+                                }[];
+                            }[];
+                            policies: {
+                                [key: string]: {
+                                    firstSeenAt: string;
+                                    policy: {
+                                        /** @enum {string} */
+                                        mode: "flat" | "percent";
+                                        assetCode: string;
+                                        assetIssuer: string | null;
+                                        /** @description The fee destination — the address `/fees` already publishes. */
+                                        destination: string;
+                                        percent: string | null;
+                                        min: string | null;
+                                        max: string | null;
+                                        /** @description Flat mode only: the fixed fee. */
+                                        amount: string | null;
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Bad date range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Missing or wrong report token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description The fee ledger could not be read */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Fee reporting is not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
