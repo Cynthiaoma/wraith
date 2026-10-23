@@ -34,6 +34,7 @@ import { networkMiddleware, requestNetwork } from "./middleware/network";
 import { renderMetrics, metricsContentType, httpRequestsTotal, httpRequestDurationSeconds } from "./metrics";
 import { getAllCachedTokens, getCachedTokenDecimals } from "./tokenCache";
 import { toDisplayAmount } from "./amount";
+import { getDependencyStatus, dependencyStatusBoundMs } from "./dependencies";
 import { HttpError, newCorrelationId } from "./utils/errors";
 
 // ─── RPC Health Check Cache ───────────────────────────────────────────────
@@ -484,6 +485,7 @@ export function createApp(): express.Application {
       const rpcSuccess = latestLedgerResult.status === "fulfilled" && typeof latestLedgerResult.value === "number";
       const latestLedger = rpcSuccess ? latestLedgerResult.value : null;
       const stats = getIndexerStats(selected);
+      const dependencies = getDependencyStatus();
 
       // Per-network progress (#161). The top-level fields above stay as they
       // were so existing consumers are unaffected; this reports each loop
@@ -524,7 +526,7 @@ export function createApp(): express.Application {
       );
       const byNetwork = Object.fromEntries(perNetwork);
 
-      if (rpcSuccess && latestLedger !== null) {
+      if (rpcSuccess && latestLedger !== null && dependencies.railsUsable) {
         res.json({
           ok: true,
           status: "healthy",
@@ -539,9 +541,12 @@ export function createApp(): express.Application {
           lagLedgers: latestLedger - (lastIndexedLedger ?? latestLedger),
           ...stats,
           networks: byNetwork,
-          cache: cacheStatus(),
-        });
-      } else {
+          dependencies,
+    dependency_status_bound_ms: dependencyStatusBoundMs,
+    cache: cacheStatus(),
+  });
+} 
+else {
         res.setHeader("X-Data-Stale", "true");
         if (lastIndexedLedger !== null) {
           res.setHeader("X-As-Of-Ledger", String(lastIndexedLedger));
@@ -554,13 +559,15 @@ export function createApp(): express.Application {
           as_of_ledger: lastIndexedLedger ?? undefined,
           lastIndexedLedger,
           last_indexed_ledger: lastIndexedLedger,
-          latestLedger: null,
-          lagLedgers: null,
+          latestLedger: rpcSuccess ? latestLedger : null,
+          lagLedgers: rpcSuccess && latestLedger !== null ? latestLedger - (lastIndexedLedger ?? latestLedger) : null,
           ...stats,
           // Also reported when degraded — with two loops, "RPC is down" is
           // usually true of one chain only, and the top-level nulls above
           // cannot say which.
           networks: byNetwork,
+          dependencies,
+          dependency_status_bound_ms: dependencyStatusBoundMs,
           cache: cacheStatus(),
         });
       }

@@ -26,6 +26,7 @@
  */
 
 import { providerRequestDurationSeconds } from "../metrics";
+import { recordDependencyOutcome } from "../dependencies";
 
 const DEFAULT_BASE_URL = "https://confidential-brianna-uselinq-52e2b233.koyeb.app";
 
@@ -427,9 +428,21 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
     // Observed on failure too. A call that spent the full 35 seconds and then
     // failed is the one an operator most needs to see, and dropping it would
     // make this histogram describe only the healthy path.
+    const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
     providerRequestDurationSeconds.observe(
       { provider: "linq", operation: options.operation, outcome },
-      Number(process.hrtime.bigint() - startedAt) / 1e9,
+      elapsedMs / 1000,
+    );
+
+    // The same observation `/status` reports, taken from the call that was
+    // happening anyway so the status route never has to probe the provider
+    // itself. Only the outcome word is kept: a Linq error message can contain
+    // the request URL, and `/status` must not repeat one back.
+    recordDependencyOutcome(
+      "linq",
+      outcome === "success",
+      Math.round(elapsedMs),
+      outcome === "success" ? undefined : outcome,
     );
   }
 }

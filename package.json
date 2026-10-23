@@ -1,7 +1,7 @@
 {
   "name": "wraith",
   "version": "1.0.0",
-  "description": "Soroban incoming token transfer indexer \u2014 fills the Horizon indexing gap for SEP-41/CAP-67 events",
+  "description": "Soroban incoming token transfer indexer — fills the Horizon indexing gap for SEP-41/CAP-67 events",
   "main": "dist/index.js",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
@@ -67,6 +67,9 @@
     "@apollo/server": "^5.5.1",
     "@as-integrations/express5": "^1.1.2",
     "@asteasolutions/zod-to-openapi": "^9.1.0",
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
+    "@emnapi/wasi-threads": "^1.2.3",
     "@fast-csv/format": "^5.0.7",
     "@prisma/client": "^5.10.0",
     "@stellar/stellar-sdk": "^15.0.1",
