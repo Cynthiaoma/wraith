@@ -1,6 +1,5 @@
 import express, { Request, Response, Router } from "express";
 
-import { prisma } from "../db";
 import {
   SIGNATURE_HEADER,
   parseEvent,
@@ -8,6 +7,7 @@ import {
   verifySignature,
 } from "../linq/webhook";
 import { reconcileNgnOrder } from "../linq/ngnOrders";
+import { reconcileOfframpOrder } from "../linq/offrampOrders";
 
 /**
  * Linq's webhook, for every rail.
@@ -83,27 +83,13 @@ export function createLinqWebhookRouter(): Router {
           return;
         }
 
-        const existing = await prisma.offrampOrder.findUnique({
-          where: { network_orderId: { network, orderId: event.orderId } },
-        });
-        if (!existing) {
-          // Not an offramp order — try the onramp/bill table before giving up.
-          if (await reconcileNgnOrder(event)) return;
-          console.warn(`[linq] webhook for unknown order ${event.orderId}`);
-          return;
-        }
+        // Same reconciliation the periodic sweep uses, so a webhook that
+        // arrives late and a poll that arrives first cannot disagree.
+        if (await reconcileOfframpOrder(event)) return;
 
-        await prisma.offrampOrder.update({
-          where: { network_orderId: { network, orderId: event.orderId } },
-          data: {
-            status: event.status ?? event.event,
-            ...(event.amountStableCoin != null
-              ? { settledStableCoin: String(event.amountStableCoin) }
-              : {}),
-            ...(event.amountNGN != null ? { settledNGN: String(event.amountNGN) } : {}),
-            ...(event.txHash ? { depositTxHash: event.txHash } : {}),
-          },
-        });
+        // Not an offramp order — try the onramp/bill table before giving up.
+        if (await reconcileNgnOrder(event)) return;
+        console.warn(`[linq] webhook for unknown order ${event.orderId}`);
       } catch (err) {
         // The response has already gone, so this cannot fail the delivery.
         // Logged loudly because the reconciliation is now missing and only the

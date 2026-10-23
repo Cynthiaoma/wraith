@@ -424,6 +424,14 @@ model OfframpOrder {
   settledNGN        String?
   depositTxHash     String?
 
+  // Reconciliation sweep bookkeeping. A webhook is a push we might never get,
+  // so a periodic job asks Linq and writes through the same reconciliation
+  // path. Attempts are persisted so a provider outage cannot retry an
+  // unresolvable order forever.
+  reconciliationAttempts Int       @default(0)
+  lastReconciledAt       DateTime?
+  needsHuman             Boolean   @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -434,6 +442,7 @@ model OfframpOrder {
   @@unique([network, idempotencyKey])
   @@index([network, walletAddress])
   @@index([network, status])
+  @@index([needsHuman, reconciliationAttempts, createdAt], map: "OfframpOrder_reconciliation_idx")
   @@schema("wraith")
 }
 
@@ -494,10 +503,18 @@ model NgnOrder {
   settledNGN        String?
   txHash            String?
 
+  /// Reconciliation sweep bookkeeping, shared with the offramp. The periodic
+  /// job asks Linq when a webhook never arrived; after enough unresolved or
+  /// failed attempts the order is flagged for a human instead of polled again.
+  reconciliationAttempts Int       @default(0)
+  lastReconciledAt       DateTime?
+  needsHuman             Boolean   @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@unique([network, orderId])
   @@index([network, status])
+  @@index([needsHuman, reconciliationAttempts, createdAt], map: "NgnOrder_reconciliation_idx")
   @@schema("wraith")
 }

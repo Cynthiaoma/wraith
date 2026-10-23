@@ -20,6 +20,7 @@ jest.mock("../graphql/subscriptions", () => ({
 }));
 jest.mock("../workers/webhooks", () => ({ startWebhookWorker: jest.fn() }));
 jest.mock("../jobs/retention", () => ({ startPartitionRetentionJob: jest.fn() }));
+jest.mock("../jobs/orderReconciliation", () => ({ startOrderReconciliationJob: jest.fn() }));
 jest.mock("../tokenCache", () => ({ initTokenCache: jest.fn().mockResolvedValue(undefined) }));
 jest.mock("../schemaGuard", () => ({ pushSchema: jest.fn(() => ({ ok: true })) }));
 jest.mock("../schemaState", () => ({

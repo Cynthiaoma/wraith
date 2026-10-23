@@ -9,6 +9,7 @@ import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
+import { startOrderReconciliationJob } from "./jobs/orderReconciliation";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
@@ -243,6 +244,9 @@ async function main() {
 
   // ── Start partition retention scheduler ───────────────────────────────────
   startPartitionRetentionJob();
+
+  // The webhook is the fast path; this catches orders whose event never arrived.
+  startOrderReconciliationJob();
 
   // Seed token metadata for every served network before handling read paths.
   // API-only deployments skip the indexer, so without this explicit seed their
