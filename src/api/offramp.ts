@@ -6,6 +6,7 @@ import { z } from "zod";
 
 import { prisma } from "../db";
 import { requestNetwork } from "../middleware/network";
+import { recordOrderCreated, recordOrderTerminal, terminalStatusOf } from "../metrics";
 import { statusForClients } from "../linq/statusForClients";
 import {
   bearerToken,
@@ -580,6 +581,8 @@ export function createOfframpRouter(
         },
       });
 
+      recordOrderCreated("offramp");
+
       res.setHeader("Cache-Control", "no-store");
       res.status(201).json({ ...order, id: creds.orderId, accessToken: creds.token });
     } catch (err) {
@@ -645,6 +648,8 @@ export function createOfframpRouter(
     // that settled twenty minutes ago is worse than a slow answer.
     try {
       const live = await getOfframpStatus(row.orderId);
+      const wasTerminal = terminalStatusOf(row.status);
+      const isTerminal = terminalStatusOf(live.status);
       if (live.status !== row.status) {
         await prisma.offrampOrder.update({
           where: { network_orderId: { network: net, orderId: row.orderId } },
@@ -655,6 +660,7 @@ export function createOfframpRouter(
           },
         });
       }
+      if (isTerminal && !wasTerminal) recordOrderTerminal("offramp", live.status);
       res.json({
         ...live,
         id: row.publicId,

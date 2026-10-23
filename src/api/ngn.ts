@@ -42,6 +42,12 @@ import { Router, Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
 import { requestNetwork } from "../middleware/network";
+import {
+  recordOrderCreated,
+  recordOrderTerminal,
+  terminalStatusOf,
+  type OrderRail,
+} from "../metrics";
 import { LinqError } from "../linq/client";
 import { sendError, sendLinqError } from "./errors";
 import { usdPerCoin } from "../linq/coinPrice";
@@ -94,6 +100,55 @@ async function fallbackToRecordedOrder(
 
   res.json({ ...recorded, stale: true, reason: "Linq is unreachable; this is our last known status" });
   return true;
+}
+
+/**
+ * Count a status poll that has just learned an order is finished.
+ *
+ * The recorded row is read before the provider is asked, so this is a
+ * transition counter rather than a poll counter: a wallet polling a completed
+ * order does not increment it again. When there is no row (the database is
+ * down, or the write after creation was lost), the terminal outcome is still
+ * worth knowing and is counted. The row is then refreshed with the new status
+ * so the next poll sees the transition as already counted.
+ */
+async function reconcileTerminalStatus(
+  recorded: Awaited<ReturnType<typeof findNgnOrder>>,
+  params: {
+    network: string;
+    customerRef: string;
+    rail: OrderRail;
+    kind: "onramp" | "bill";
+    status: string;
+  },
+): Promise<void> {
+  const terminal = terminalStatusOf(params.status);
+  if (!terminal) return;
+
+  // With no stored row there is no previous status, so there is no transition to
+  // observe — and nothing to write either, so counting here would count the
+  // same ending again on every later poll. orders_terminal_total is documented
+  // as a transition counter rather than a poll counter, and a wallet polling a
+  // finished order is exactly the case that promise is about.
+  if (!recorded) return;
+  if (terminalStatusOf(recorded.status)) return;
+
+  recordOrderTerminal(params.rail, terminal);
+
+  await recordNgnOrder({
+    network: params.network,
+    kind: params.kind,
+    orderId: recorded.orderId,
+    customerRef: params.customerRef,
+    walletAddress: recorded.walletAddress,
+    coin: recorded.coin,
+    amountStableCoin: recorded.amountStableCoin,
+    amountNgn: recorded.amountNGN,
+    rate: recorded.rate,
+    status: params.status,
+    ...(recorded.billCategory ? { billCategory: recorded.billCategory } : {}),
+    ...(recorded.provider ? { provider: recorded.provider } : {}),
+  });
 }
 
 /**
@@ -710,6 +765,7 @@ export function createNgnRouter(
         rate: Number(rate),
         coin: resolvedCoin,
       });
+      recordOrderCreated("onramp");
       res.json(order);
 
       // After the response, deliberately. The user is holding bank details they
@@ -742,7 +798,19 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getOnrampStatus(customerRef, req.params.orderId));
+      const network = requestNetwork(req);
+      const [recorded, live] = await Promise.all([
+        findNgnOrder(network, customerRef, req.params.orderId).catch(() => null),
+        getOnrampStatus(customerRef, req.params.orderId),
+      ]);
+      await reconcileTerminalStatus(recorded, {
+        network,
+        customerRef,
+        rail: "onramp",
+        kind: "onramp",
+        status: live.status,
+      });
+      res.json(live);
     } catch (err) {
       if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
         return;
@@ -808,6 +876,7 @@ export function createNgnRouter(
         coin: resolvedCoin,
         refundAddress,
       });
+      recordOrderCreated("bills");
       res.json(order);
 
       // `customerId` — the phone or meter number — is not passed on. It went to
@@ -840,7 +909,19 @@ export function createNgnRouter(
 
     try {
       res.setHeader("Cache-Control", "no-store");
-      res.json(await getBillStatus(customerRef, req.params.orderId));
+      const network = requestNetwork(req);
+      const [recorded, live] = await Promise.all([
+        findNgnOrder(network, customerRef, req.params.orderId).catch(() => null),
+        getBillStatus(customerRef, req.params.orderId),
+      ]);
+      await reconcileTerminalStatus(recorded, {
+        network,
+        customerRef,
+        rail: "bills",
+        kind: "bill",
+        status: live.status,
+      });
+      res.json(live);
     } catch (err) {
       if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
         return;

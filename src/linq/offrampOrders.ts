@@ -7,6 +7,7 @@
  */
 
 import { prisma } from "../db";
+import { recordOrderTerminal, terminalStatusOf } from "../metrics";
 import { resolveEventNetwork } from "./webhook";
 
 export interface OfframpReconciliationEvent {
@@ -37,10 +38,19 @@ export async function reconcileOfframpOrder(
   });
   if (!existing) return false;
 
+  const status = event.status ?? event.event;
+
+  // Counted here rather than in the webhook so the sweep counts it too: either
+  // path may be the one that first sees the ending. Comparing the row we just
+  // read against the incoming status is what keeps a redelivered webhook, and a
+  // wallet polling a finished order, from counting the same ending twice.
+  const wasTerminal = terminalStatusOf(existing.status);
+  const isTerminal = terminalStatusOf(status);
+
   await prisma.offrampOrder.update({
     where: { network_orderId: { network, orderId: event.orderId } },
     data: {
-      status: event.status ?? event.event,
+      status,
       ...(event.amountStableCoin != null
         ? { settledStableCoin: String(event.amountStableCoin) }
         : {}),
@@ -48,5 +58,7 @@ export async function reconcileOfframpOrder(
       ...(event.txHash ? { depositTxHash: event.txHash } : {}),
     },
   });
+
+  if (isTerminal && !wasTerminal) recordOrderTerminal("offramp", status);
   return true;
 }

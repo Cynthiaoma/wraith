@@ -166,6 +166,109 @@ export const eventsSkippedTotal = new Counter({
   registers: [registry],
 });
 
+/** The money-moving rails, as a finite label set. */
+export type OrderRail = "offramp" | "onramp" | "bills";
+
+/** Terminal endings the provider uses, normalised to one word each. */
+export type OrderTerminalStatus =
+  | "completed"
+  | "settled"
+  | "disbursed"
+  | "failed"
+  | "expired"
+  | "cancelled"
+  | "refunded"
+  | "reversed"
+  | "timeout";
+
+/**
+ * Map any provider or webhook status to a bounded terminal status, or null.
+ *
+ * Statuses arrive from several places and are not one vocabulary: a webhook
+ * says `order.completed`, a poll may say `settled`, and the provider can
+ * expire, cancel, refund or reverse an order. The metric label must be drawn
+ * from a finite set, so every spelling of an ending maps to one of the words
+ * below. Anything still in flight, or an ending nobody has taught us yet,
+ * returns null and is not counted as terminal.
+ */
+/**
+ * Segments that mean the order is still moving, whatever ending-word appears
+ * beside them. Checked before the endings below because those are substring
+ * matches: "refund_pending" contains "refund".
+ */
+const STILL_MOVING_SEGMENTS = [
+  "pending",
+  "processing",
+  "awaiting",
+  "queued",
+  "initiated",
+  "progress",
+  "not",
+];
+
+export function terminalStatusOf(status: string | null | undefined): OrderTerminalStatus | null {
+  if (!status) return null;
+  const s = status.toLowerCase();
+
+  // Reading a pending status as an ending does more than inflate the counter:
+  // the caller only records a transition when the previous status was not
+  // terminal, so once "refund_pending" counts as refunded, the actual refund is
+  // never counted at all.
+  const segments = s.split(/[^a-z]+/).filter(Boolean);
+  if (segments.some((segment) => STILL_MOVING_SEGMENTS.includes(segment))) return null;
+
+  if (s.includes("completed")) return "completed";
+  if (s.includes("settled")) return "settled";
+  if (s.includes("disbursed")) return "disbursed";
+  if (s.includes("failed")) return "failed";
+  if (s.includes("expire")) return "expired";
+  if (s.includes("cancel")) return "cancelled";
+  if (s.includes("refund")) return "refunded";
+  if (s.includes("revers")) return "reversed";
+  if (s.includes("timeout")) return "timeout";
+  return null;
+}
+
+/**
+ * Orders created successfully, by rail.
+ *
+ * Counted only after the provider has returned an order (and, on the offramp,
+ * after our row is written), so a retry that replays an existing order does
+ * not inflate the number.
+ */
+export const ordersCreatedTotal = new Counter({
+  name: "orders_created_total",
+  help: "Orders created successfully, by rail",
+  labelNames: ["rail"] as const,
+  registers: [registry],
+});
+
+/**
+ * Orders that reached a terminal state, by rail and terminal status.
+ *
+ * A transition counter, not a poll counter: callers record it only when an
+ * order moves from a non-terminal status to a terminal one, so a wallet polling
+ * a finished order and a redelivered webhook do not count it twice.
+ */
+export const ordersTerminalTotal = new Counter({
+  name: "orders_terminal_total",
+  help: "Orders that reached a terminal state, by rail and terminal status",
+  labelNames: ["rail", "status"] as const,
+  registers: [registry],
+});
+
+/** Record one successfully created order. */
+export function recordOrderCreated(rail: OrderRail): void {
+  ordersCreatedTotal.inc({ rail });
+}
+
+/** Record one non-terminal → terminal transition. */
+export function recordOrderTerminal(rail: OrderRail, status: string): void {
+  const terminal = terminalStatusOf(status);
+  if (!terminal) return;
+  ordersTerminalTotal.inc({ rail, status: terminal });
+}
+
 /**
  * The highest ledger the indexer has committed, per network.
  *
