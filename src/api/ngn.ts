@@ -800,8 +800,8 @@ export function createNgnRouter(
       res.setHeader("Cache-Control", "no-store");
       const network = requestNetwork(req);
       const [recorded, live] = await Promise.all([
-        findNgnOrder(network, customerRef, req.params.orderId).catch(() => null),
-        getOnrampStatus(customerRef, req.params.orderId),
+        findNgnOrder(network, customerRef, req.params.orderId as string).catch(() => null),
+        getOnrampStatus(customerRef, req.params.orderId as string),
       ]);
       await reconcileTerminalStatus(recorded, {
         network,
@@ -812,7 +812,7 @@ export function createNgnRouter(
       });
       res.json(live);
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);
@@ -911,8 +911,8 @@ export function createNgnRouter(
       res.setHeader("Cache-Control", "no-store");
       const network = requestNetwork(req);
       const [recorded, live] = await Promise.all([
-        findNgnOrder(network, customerRef, req.params.orderId).catch(() => null),
-        getBillStatus(customerRef, req.params.orderId),
+        findNgnOrder(network, customerRef, req.params.orderId as string).catch(() => null),
+        getBillStatus(customerRef, req.params.orderId as string),
       ]);
       await reconcileTerminalStatus(recorded, {
         network,
@@ -923,7 +923,7 @@ export function createNgnRouter(
       });
       res.json(live);
     } catch (err) {
-      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId)) {
+      if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
       }
       sendLinqError(res, err);
