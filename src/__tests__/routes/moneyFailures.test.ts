@@ -359,7 +359,10 @@ describe("a rejected payout", () => {
 describe("an order that ended failed after the user paid", () => {
   it("is recorded on the rail the order was placed on", async () => {
     await recordNgnOrder({
-      network: "mainnet",
+      // The webhook carries no network, so reconciliation resolves it with
+      // currentNetwork() — testnet by default. Seed the order on that same
+      // network or the compound-key lookup will not find it.
+      network: "testnet",
       kind: "bill",
       orderId: "00000000-0000-4000-8000-0000000000b1",
       customerRef: "ref_test_0001",
@@ -384,7 +387,7 @@ describe("an order that ended failed after the user paid", () => {
     const failure = tables.moneyFailure[0];
     expect(failure.kind).toBe("order_failed");
     expect(failure.rail).toBe("bill");
-    expect(failure.network).toBe("mainnet");
+    expect(failure.network).toBe("testnet");
     expect(failure.orderId).toBe("00000000-0000-4000-8000-0000000000b1");
     expect(failure.message).toContain("Bill order ended as");
     expect(tables.ngnOrder[0].status).toBe("failed: provider declined");
@@ -392,7 +395,7 @@ describe("an order that ended failed after the user paid", () => {
 
   it("an onramp failure is recorded as onramp, not bill", async () => {
     await recordNgnOrder({
-      network: "mainnet",
+      network: "testnet",
       kind: "onramp",
       orderId: "00000000-0000-4000-8000-0000000000a1",
       customerRef: "ref_test_0001",
@@ -530,7 +533,7 @@ describe("GET /ops/failures", () => {
     });
     await reconciled();
     await recordNgnOrder({
-      network: "mainnet",
+      network: "testnet",
       kind: "bill",
       orderId: "00000000-0000-4000-8000-0000000000b2",
       customerRef: "ref_test_0001",
