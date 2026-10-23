@@ -58,6 +58,8 @@ import {
   railErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
+  feeReportQuerySchema,
+  feeReportResponseSchema,
   feesQuerySchema,
   feesResponseSchema,
 } from "./schemas";
@@ -588,6 +590,27 @@ registry.registerPath({
     200: { description: "OK", content: { "application/json": { schema: offrampOrderStatusResponseSchema } } },
     401: { description: "Order access token required (code: unauthorized)", content: { "application/json": { schema: railErrorResponseSchema } } },
     ...internalErrorResponses,
+  },
+});
+
+registry.registerComponent("securitySchemes", "bearerAuth", { type: "http", scheme: "bearer" });
+
+registry.registerPath({
+  method: "get",
+  path: "/fees/report",
+  summary: "Platform fees charged, per UTC day and asset, with the policy behind them",
+  description:
+    "Internal endpoint. Not part of the public data API: an operator report over the fee " +
+    "ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.",
+  "x-internal": true,
+  security: [{ bearerAuth: [] }],
+  request: { query: feeReportQuerySchema },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: feeReportResponseSchema } } },
+    400: { description: "Bad date range", content: { "application/json": { schema: errorResponseSchema } } },
+    401: { description: "Missing or wrong report token", content: { "application/json": { schema: errorResponseSchema } } },
+    500: { description: "The fee ledger could not be read", content: { "application/json": { schema: errorResponseSchema } } },
+    503: { description: "Fee reporting is not configured on this deployment", content: { "application/json": { schema: errorResponseSchema } } },
   },
 });
 
