@@ -1,6 +1,7 @@
 import express, { Request, Response, Router } from "express";
 
 import { prisma } from "../db";
+import { recordOrderTerminal, terminalStatusOf } from "../metrics";
 import {
   SIGNATURE_HEADER,
   parseEvent,
@@ -93,10 +94,13 @@ export function createLinqWebhookRouter(): Router {
           return;
         }
 
+        const status = event.status ?? event.event;
+        const wasTerminal = terminalStatusOf(existing.status);
+        const isTerminal = terminalStatusOf(status);
         await prisma.offrampOrder.update({
           where: { network_orderId: { network, orderId: event.orderId } },
           data: {
-            status: event.status ?? event.event,
+            status,
             ...(event.amountStableCoin != null
               ? { settledStableCoin: String(event.amountStableCoin) }
               : {}),
@@ -104,6 +108,7 @@ export function createLinqWebhookRouter(): Router {
             ...(event.txHash ? { depositTxHash: event.txHash } : {}),
           },
         });
+        if (isTerminal && !wasTerminal) recordOrderTerminal("offramp", status);
       } catch (err) {
         // The response has already gone, so this cannot fail the delivery.
         // Logged loudly because the reconciliation is now missing and only the

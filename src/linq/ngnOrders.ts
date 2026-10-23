@@ -30,6 +30,7 @@
  */
 
 import { prisma } from "../db";
+import { recordOrderTerminal, terminalStatusOf } from "../metrics";
 import { resolveEventNetwork } from "./webhook";
 
 export type NgnOrderKind = "onramp" | "bill";
@@ -124,6 +125,8 @@ export async function findNgnOrder(
   orderId: string,
 ): Promise<{
   orderId: string;
+  customerRef: string;
+  walletAddress: string;
   status: string;
   kind: string;
   coin: string;
@@ -146,6 +149,8 @@ export async function findNgnOrder(
 
   return {
     orderId: row.orderId,
+    customerRef: row.customerRef,
+    walletAddress: row.walletAddress,
     status: row.status,
     kind: row.kind,
     coin: row.coin,
@@ -187,10 +192,14 @@ export async function reconcileNgnOrder(event: {
   });
   if (!existing) return false;
 
+  const status = event.status ?? event.event;
+  const wasTerminal = terminalStatusOf(existing.status);
+  const isTerminal = terminalStatusOf(status);
+
   await prisma.ngnOrder.update({
     where: { network_orderId: { network, orderId: event.orderId } },
     data: {
-      status: event.status ?? event.event,
+      status,
       ...(event.amountStableCoin != null
         ? { settledStableCoin: String(event.amountStableCoin) }
         : {}),
@@ -198,5 +207,9 @@ export async function reconcileNgnOrder(event: {
       ...(event.txHash ? { txHash: event.txHash } : {}),
     },
   });
+
+  if (isTerminal && !wasTerminal) {
+    recordOrderTerminal(existing.kind === "bill" ? "bills" : "onramp", status);
+  }
   return true;
 }

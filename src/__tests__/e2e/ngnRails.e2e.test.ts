@@ -35,6 +35,7 @@ import { installFakeLinq, fakeLinq } from "../fakeLinq";
 import { createNgnRouter, __clearNgnRateCache } from "../../api/ngn";
 import { networkMiddleware } from "../../middleware/network";
 import { computeSignature } from "../../linq/webhook";
+import { registry, _resetMetrics } from "../../metrics";
 
 // ─── Database mock ────────────────────────────────────────────────────────────
 // recordNgnOrder and reconcileNgnOrder need a database; the E2E test is about
@@ -92,6 +93,7 @@ beforeEach(() => {
 
   installFakeLinq();
   __clearNgnRateCache();
+  _resetMetrics();
   jest.clearAllMocks();
 });
 
@@ -174,6 +176,7 @@ describe("full onramp happy path", () => {
     expect(orderRes.body.bankName).toBe("Wema Bank");
     expect(orderRes.body.status).toBe("awaiting payment");
     const orderId: string = orderRes.body.orderId as string;
+    expect(await registry.metrics()).toContain('orders_created_total{rail="onramp"} 1');
 
     // Step 5 — status before settlement
     const statusBefore = await mainnet(
@@ -191,6 +194,9 @@ describe("full onramp happy path", () => {
     );
     expect(statusAfter.status).toBe(200);
     expect(statusAfter.body.status).toBe("completed");
+    expect(await registry.metrics()).toContain(
+      'orders_terminal_total{rail="onramp",status="completed"} 1',
+    );
   });
 
   it("full bill payment flow: provision → KYC → rate → bill order → status → settled", async () => {
@@ -241,6 +247,7 @@ describe("full onramp happy path", () => {
     expect(billRes.body.wallet).toBeTruthy();
     expect(billRes.body.status).toBe("initiated");
     const billOrderId: string = billRes.body.id as string;
+    expect(await registry.metrics()).toContain('orders_created_total{rail="bills"} 1');
 
     // Status
     const statusBefore = await mainnet(
@@ -256,6 +263,9 @@ describe("full onramp happy path", () => {
     );
     expect(statusAfter.status).toBe(200);
     expect(statusAfter.body.status).toBe("completed");
+    expect(await registry.metrics()).toContain(
+      'orders_terminal_total{rail="bills",status="completed"} 1',
+    );
   });
 });
 
