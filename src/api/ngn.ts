@@ -38,6 +38,7 @@
  * before anything else.
  */
 
+import { billStatusForClients } from "../linq/statusForClients";
 import { Router, Request, Response, NextFunction } from "express";
 import rateLimit, { type RateLimitRequestHandler } from "express-rate-limit";
 
@@ -919,9 +920,15 @@ export function createNgnRouter(
         customerRef,
         rail: "bills",
         kind: "bill",
+        // Reconcile on the provider's own word, never the translated one: the
+        // ledger and the metrics record what Linq said.
         status: live.status,
       });
-      res.json(live);
+      // Translated for the client, raw value kept alongside it. The bills
+      // screen ends on /complete|success|delivered/ and Linq ends a vend as
+      // "settled"/"disbursed", so the untranslated value left a delivered
+      // top-up spinning forever. See billStatusForClients.
+      res.json({ ...live, status: billStatusForClients(live.status), providerStatus: live.status });
     } catch (err) {
       if (await fallbackToRecordedOrder(res, err, requestNetwork(req), customerRef, req.params.orderId as string)) {
         return;
