@@ -23,9 +23,12 @@ Failure responses for identity verification by NIN (W087).
 - **`code` is forwarded verbatim.** It is never renamed, and an unknown code is
   never mapped onto a known one. A client must branch on `code`, and must have a
   default branch for codes it does not recognise.
-- **No `code` means nobody said why.** When the provider gives no usable code,
-  the `code` key is absent (not `null`, not `""`). `error` then says only that
-  the request failed and its status; it never names a cause. Show generic copy.
+- **`code` is always present** (#287). When the provider gives no usable code,
+  wraith assigns its own stable fallback instead of omitting the key:
+  `provider_rejected` for a 4xx, `provider_error` for a 5xx — never `null`,
+  never `""`. Neither names a cause: `error` still says only that the request
+  failed and its status, and both deserve the client's generic copy. A body
+  that omits `code` entirely should no longer occur on these surfaces.
 - **A provider 5xx arrives as 502**, with its code intact: `kyc_internal_error`
   is sent as 500 by the provider and reaches clients as 502. Branch on `code`,
   not on status, for anything code-specific.
@@ -46,8 +49,10 @@ curl -fsSL -o test/fixtures/kyc-errors.json \
 ```
 
 Then, for each case, feed `veil.status` and `veil.body` to the client's error
-handling and assert the copy branch it picks — and that every `no_code` and
-`undocumented` case lands in the generic branch.
+handling and assert the copy branch it picks — that every `no_code` case lands
+in the generic branch on its fallback code (`provider_rejected` /
+`provider_error`), and every `undocumented` case falls to the default branch
+for a code it does not recognise.
 
 ### Rules for editing
 

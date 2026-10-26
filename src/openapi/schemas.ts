@@ -210,29 +210,36 @@ export const readyzResponseSchema = z.object({
     .optional(),
 });
 
+const dependencyStatusSchema = z.object({
+  name: z.string(),
+  status: z.enum(["ok", "degraded", "down", "unknown"]),
+  lastCheckedAt: z.string().datetime({ offset: true }).nullable(),
+  lastOkAt: z.string().datetime({ offset: true }).nullable(),
+  latencyMs: z.number().int().nullable(),
+  detail: z.string().nullable(),
+});
+
 export const statusResponseSchema = z.object({
-  ok: z.literal(true),
-  /** The network the top-level fields describe; `networks` reports every loop. */
-  network: z.enum(["testnet", "mainnet"]).optional(),
   lastIndexedLedger: z.number().int().nullable(),
   latestLedger: z.number().int().nullable(),
   lagLedgers: z.number().int().nullable(),
   startedAt: z.string().datetime({ offset: true }).optional(),
   uptimeSeconds: z.number().int().optional(),
   totalIndexed: z.number().int().optional(),
-  networks: z
-    .record(
-      z.string(),
-      z.object({
-        lastIndexedLedger: z.number().int().nullable(),
-        latestLedger: z.number().int().nullable(),
-        lagLedgers: z.number().int().nullable(),
-        running: z.boolean(),
-        reason: z.string().optional(),
-      }).passthrough()
-    )
-    .optional(),
+  networks: z.record(
+    z.string(),
+    z.object({
+      lastIndexedLedger: z.number().int().nullable(),
+      latestLedger: z.number().int().nullable(),
+      lagLedgers: z.number().int().nullable(),
+      running: z.boolean(),
+      reason: z.string().optional(),
+    }).passthrough()
+  ).optional(),
+  status: z.enum(["healthy", "degraded"]),
+  dependencies: z.array(dependencyStatusSchema),
 }).passthrough();
+
 
 export const transferSchema = z.object({
   id: z.number().int(),
@@ -771,38 +778,85 @@ export const offrampOrderStatusResponseSchema = z.object({
   source: z.enum(["live", "cache"]),
 });
 
-export const offrampErrorResponseSchema = z.object({
-  error: z.string(),
-});
-
-export const ngnCustomerStatusQuerySchema = z.object({
-  customerRef: z.string().openapi({
+/**
+ * The one error shape both money rails answer with (#287).
+ *
+ * `code` is the stable, machine-readable half — snake_case and never renamed,
+ * so installed clients can branch on it — and `error` is prose for a person.
+ * A provider code passes through verbatim; when the provider sends none,
+ * wraith assigns one of its own fallbacks (`rate_limited`,
+ * `provider_rejected`, `provider_error`), so `code` is never absent on the
+ * rails. The full catalogue is documented in `docs/ngn-rails.md`.
+ */
+export const railErrorResponseSchema = z.object({
+  error: z.string().openapi({
     description:
-      "Our identifier for the person, stable for the life of their install. " +
-      "Derived from the wallet address, never a provider id.",
-    example: "veil_a1b2c3d4e5f6",
+      "Prose for a person. Never branch on it — it changes when the provider rewords an error.",
+  }),
+  code: z.string().openapi({
+    description:
+      "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+    example: "coin_not_available",
+  }),
+  retryAfterSeconds: z.number().optional().openapi({
+    description: "On a provider 429 only: how long the shared limit asks you to wait.",
   }),
 });
 
-export const ngnCustomerStatusResponseSchema = z.object({
-  customerRef: z.string(),
-  verified: z.boolean().openapi({
-    description:
-      "Whether the provider verifies this reference right now. Read-only: " +
-      "asking does not create a customer and does not spend a verification " +
-      "attempt, which is the reason this route exists.",
-  }),
-  status: z.string().optional(),
+
+export const feeReportQuerySchema = z.object({
+  from: optionalQueryString("First UTC date to report, YYYY-MM-DD. Defaults to today."),
+  to: optionalQueryString("Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it."),
 });
 
+const feePolicySchema = z.object({
+  mode: z.enum(["flat", "percent"]),
+  assetCode: z.string(),
+  assetIssuer: z.string().nullable(),
+  destination: z.string().openapi({ description: "The fee destination — the address `/fees` already publishes." }),
+  percent: z.string().nullable(),
+  min: z.string().nullable(),
+  max: z.string().nullable(),
+  amount: z.string().nullable().openapi({ description: "Flat mode only: the fixed fee." }),
+});
+
+export const feeReportResponseSchema = z.object({
+  network: z.string(),
+  from: z.string(),
+  to: z.string(),
+  alarmPercent: z.number().openapi({ description: "VEIL_FEE_ALARM_PERCENT in force for this report." }),
+  days: z.array(
+    z.object({
+      date: z.string(),
+      assets: z.array(
+        z.object({
+          assetCode: z.string(),
+          assetIssuer: z.string().nullable(),
+          quotes: z.number().int(),
+          feesQuoted: z.string().openapi({ description: "Sum of every fee quoted — what clients were told to charge." }),
+          alarms: z.number().int(),
+          policyIds: z.array(z.string()),
+          collected: z.string().nullable().openapi({
+            description:
+              "What the fee destination received in this asset that day, per the index. " +
+              "Null when the asset is not indexed — which is not zero.",
+          }),
+          collectedNote: z.string().optional(),
+        }),
+      ),
+    }),
+  ),
+  policies: z.record(
+    z.string(),
+    z.object({ firstSeenAt: z.string(), policy: feePolicySchema }),
+  ),
+});
 
 // ─── GET /fees ──────────────────────────────────────────────────────────────
-
 export const feesQuerySchema = z.object({
   amount: optionalQueryString(
     "The amount being sent, in whole units of the asset. When given and a percentage " +
-      "fee is configured, each fee is computed for it; without it each fee is the " +
-      "floor. Optional because shipped clients predate it.",
+    "fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
   ).openapi({ example: "25" }),
 });
 
@@ -831,3 +885,27 @@ export const feesResponseSchema = z.object({
     description: "Keyed by asset code. Always charged in the asset being sent.",
   }),
 });
+
+export const ngnCustomerStatusQuerySchema = z.object({
+  customerRef: z.string().openapi({
+    description:
+      "Our identifier for the person, stable for the life of their install. " +
+      "Derived from the wallet address, never a provider id.",
+    example: "veil_a1b2c3d4e5f6",
+  }),
+});
+
+export const ngnCustomerStatusResponseSchema = z.object({
+  customerRef: z.string(),
+  verified: z.boolean().openapi({
+    description:
+      "Whether the provider verifies this reference right now. Read-only: " +
+      "asking does not create a customer and does not spend a verification " +
+      "attempt, which is the reason this route exists.",
+  }),
+  status: z.string().optional(),
+});
+
+
+
+

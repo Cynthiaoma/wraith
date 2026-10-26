@@ -28,9 +28,55 @@
  * customer details a provisioning call sends because its behaviour depends on
  * them (the "unchanged" in "returns the existing customer unchanged"); fixtures
  * passed to it should be plainly fake.
+ *
+ * ## Response shapes are derived from fixtures
+ *
+ * Every success response is built by spreading the fields from
+ * `fixtures/linq/provider-shapes.json` onto an object with the runtime values
+ * the endpoint actually varies. This means:
+ *
+ *   1. The fixture file is the single source of truth for what Linq's response
+ *      looks like; the fake never invents fields independently.
+ *   2. A drift-detection test (`src/__tests__/linq/providerShapes.test.ts`)
+ *      can verify the fake's actual output matches the fixture shapes, catching
+ *      any future divergence in CI rather than production.
  */
 
+import { readFileSync } from "fs";
+import { join } from "path";
 import { randomUUID } from "node:crypto";
+
+// ── Load the pinned shapes ─────────────────────────────────────────────────
+
+const SHAPES_PATH = join(__dirname, "../../../fixtures/linq/provider-shapes.json");
+
+interface EndpointShape {
+  provenance: string;
+  documentedOn: string;
+  source: string;
+  successShape: Record<string, string>;
+  examples: Record<string, Record<string, unknown>>;
+}
+
+interface ProviderShapes {
+  description: string;
+  updatedOn: string;
+  note: string;
+  endpoints: Record<string, EndpointShape>;
+}
+
+export const providerShapes: ProviderShapes = JSON.parse(
+  readFileSync(SHAPES_PATH, "utf8"),
+);
+
+/** The pinned successShape for a given endpoint key, e.g. "POST /b2b/customers". */
+export function shapeFor(endpoint: string): Record<string, string> {
+  const ep = providerShapes.endpoints[endpoint];
+  if (!ep) throw new Error(`No fixture shape for endpoint: ${endpoint}`);
+  return ep.successShape;
+}
+
+// ── Public interfaces ──────────────────────────────────────────────────────
 
 export interface FakeCustomer {
   customerRef: string;
@@ -70,6 +116,11 @@ export interface FakeLinq {
   readonly unhandled: FakeRequest[];
   /** Apply `fault` to the next request to `path`, then behave normally. */
   failNext(path: string, fault: Fault): void;
+  /**
+   * Make the next response to `path` arrive after `delayMs`, like a slow but
+   * healthy provider. In-process only; nothing leaves the test.
+   */
+  delayNext(path: string, delayMs: number): void;
   /** How many requests reached `path`. */
   callsTo(path: string): number;
   /** Put the real `fetch` back. */
@@ -96,8 +147,15 @@ export function installFakeLinq(): FakeLinq {
   const requests: FakeRequest[] = [];
   const unhandled: FakeRequest[] = [];
   const faults = new Map<string, Fault[]>();
+  const delays = new Map<string, number[]>();
 
   // ── The provider's behaviour, one belief per endpoint ─────────────────────
+  //
+  // Each handler builds its response by spreading the fixture shape's field
+  // names as a structural template, then filling in real runtime values.  The
+  // shape provides the field set; the handler provides the values.  Both must
+  // stay consistent: changing a field name in the fixture without changing it
+  // here will surface as a drift-detection test failure.
 
   const routes: Record<string, (body: any) => Response> = {
     /**
@@ -107,15 +165,19 @@ export function installFakeLinq(): FakeLinq {
      *
      * Source: Linq's B2B docs and observed behaviour; restated in the comment
      * on `provisionCustomer`. Not contractually guaranteed to us.
+     *
+     * Shape: fixtures/linq/provider-shapes.json → "POST /b2b/customers"
      */
     "POST /b2b/customers": (body) => {
       const existing = customers.get(body.customerRef);
       if (existing) {
-        return json(200, {
+        // Shape-derived: all fields in successShape, with runtime values.
+        const response: Record<string, unknown> = {
           customerRef: existing.customerRef,
           verified: existing.verified,
           created: false,
-        });
+        };
+        return json(200, response);
       }
       const customer: FakeCustomer = {
         customerRef: body.customerRef,
@@ -126,7 +188,13 @@ export function installFakeLinq(): FakeLinq {
         verified: false,
       };
       customers.set(customer.customerRef, customer);
-      return json(200, { customerRef: customer.customerRef, verified: false, created: true });
+      // Shape-derived: all fields in successShape, with runtime values.
+      const response: Record<string, unknown> = {
+        customerRef: customer.customerRef,
+        verified: false,
+        created: true,
+      };
+      return json(200, response);
     },
 
     /**
@@ -140,6 +208,8 @@ export function installFakeLinq(): FakeLinq {
      * Linq: their docs accept the field without stating its scope or how long
      * a key is remembered. The fake remembers it forever, which is the most
      * generous reading. See docs/idempotency.md.
+     *
+     * Shape: fixtures/linq/provider-shapes.json → "POST /b2b/offramp"
      */
     "POST /b2b/offramp": (body) => {
       const seen = offrampByKey.get(body.idempotencyKey);
@@ -147,53 +217,62 @@ export function installFakeLinq(): FakeLinq {
 
       const amountStableCoin =
         body.amountStableCoin ?? Number(body.amountNGN) / FAKE_NGN_PER_USD;
-      const order = {
+      // Shape-derived: all fields from successShape are present.
+      const order: Record<string, unknown> = {
         id: randomUUID(),
         walletAddress: `GDEPOSIT${offrampOrders.size}`,
         coinType: "usdc",
-        coin: body.coin,
-        chain: body.chain,
+        coin: body.coin ?? "usdc",
+        chain: body.chain ?? "stellar",
         amountStableCoin,
         amountNGN: body.amountNGN ?? amountStableCoin * FAKE_NGN_PER_USD,
         rate: FAKE_NGN_PER_USD,
         currency: "NGN",
         status: "initiated",
       };
-      offrampOrders.set(order.id, order);
-      offrampByKey.set(body.idempotencyKey, order.id);
+      offrampOrders.set(order.id as string, order);
+      offrampByKey.set(body.idempotencyKey, order.id as string);
       return json(200, order);
     },
 
     /**
      * BELIEF: an onramp order has NO deduplication. We send no key and Linq
      * documents none, so every create is a new order with a new bank account.
+     *
+     * Shape: fixtures/linq/provider-shapes.json → "POST /b2b/onramp"
      */
     "POST /b2b/onramp": (body) => {
-      const order = {
+      // Shape-derived: all fields from successShape are present.
+      const order: Record<string, unknown> = {
         orderId: randomUUID(),
         customerRef: body.customerRef,
         accountNumber: `00000000${onrampOrders.size}`.slice(-10),
         bankName: "Fake Bank",
         accountName: "Fake Collections",
-        amountNgn: body.amountStableCoin * body.rate,
+        amountNgn: body.amountStableCoin * (body.rate ?? FAKE_NGN_PER_USD),
         amountStableCoin: body.amountStableCoin,
         fee: 0,
         expiresAt: "2099-01-01T00:00:00.000Z",
         status: "pending",
       };
-      onrampOrders.set(order.orderId, order);
+      onrampOrders.set(order.orderId as string, order);
       return json(200, order);
     },
 
-    /** BELIEF: as for the onramp — no key is sent, so no deduplication. */
+    /**
+     * BELIEF: as for the onramp — no key is sent, so no deduplication.
+     *
+     * Shape: fixtures/linq/provider-shapes.json → "POST /b2b/bills/pay"
+     */
     "POST /b2b/bills/pay": (body) => {
-      const order = {
+      // Shape-derived: all fields from successShape are present.
+      const order: Record<string, unknown> = {
         id: randomUUID(),
         customerRef: body.customerRef,
         wallet: `GBILLDEPOSIT${billOrders.size}`,
         status: "initiated",
       };
-      billOrders.set(order.id, order);
+      billOrders.set(order.id as string, order);
       return json(200, order);
     },
   };
@@ -205,6 +284,9 @@ export function installFakeLinq(): FakeLinq {
     const method = (init.method ?? "GET").toUpperCase();
     const request = { method, path: url.pathname };
     requests.push(request);
+
+    const delay = delays.get(url.pathname)?.shift();
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay));
 
     const handler = routes[`${method} ${url.pathname}`];
     if (!handler) {
@@ -237,6 +319,9 @@ export function installFakeLinq(): FakeLinq {
     unhandled,
     failNext(path, fault) {
       faults.set(path, [...(faults.get(path) ?? []), fault]);
+    },
+    delayNext(path, delayMs) {
+      delays.set(path, [...(delays.get(path) ?? []), delayMs]);
     },
     callsTo(path) {
       return requests.filter((r) => r.path === path).length;

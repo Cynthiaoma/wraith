@@ -32,7 +32,7 @@
  * that is five times wrong is a loss.
  */
 
-import { LinqError } from "./client";
+import { LinqError } from "./http";
 
 /** Circle's USDC on mainnet, identified by home domain rather than code. */
 const USDC_ISSUER = "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN";

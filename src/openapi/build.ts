@@ -55,9 +55,11 @@ import {
   offrampOrderResponseSchema,
   offrampOrderParamsSchema,
   offrampOrderStatusResponseSchema,
-  offrampErrorResponseSchema,
+  railErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
+  feeReportQuerySchema,
+  feeReportResponseSchema,
   feesQuerySchema,
   feesResponseSchema,
 } from "./schemas";
@@ -116,7 +118,14 @@ registry.registerPath({
       description: "OK",
       content: { "application/json": { schema: ngnCustomerStatusResponseSchema } },
     },
-    ...commonErrorResponses,
+    // Rail error shape (#287): every failure on /ngn carries `code`.
+    400: { description: "Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    404: { description: "Not Found (code: not_found)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    429: { description: "Rate limited (veil_rate_limited ours / rate_limited the provider's)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    500: { description: "Internal Server Error (code: internal_error)", content: { "application/json": { schema: railErrorResponseSchema } } },
+    502: { description: "Provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
+    503: { description: "Naira rails not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
+    504: { description: "Provider did not respond in time", content: { "application/json": { schema: railErrorResponseSchema } } },
   },
 });
 
@@ -482,8 +491,9 @@ registry.registerPath({
 
 const internalErrorResponses = {
   ...commonErrorResponses,
-  502: { description: "Payout provider error", content: { "application/json": { schema: offrampErrorResponseSchema } } },
-  503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: offrampErrorResponseSchema } } },
+  429: { description: "Rate limited (this deployment's or the provider's — the `code` says which)", content: { "application/json": { schema: railErrorResponseSchema } } },
+  502: { description: "Payout provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
+  503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
 };
 
 registry.registerPath({
@@ -502,7 +512,7 @@ registry.registerPath({
     ...commonErrorResponses,
     // No 502: nothing here reaches the provider. 503 is the answer a client
     // hides its cash-out CTA on, so it is the one that has to be documented.
-    503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: offrampErrorResponseSchema } } },
+    503: { description: "Offramp not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
   },
 });
 
@@ -578,7 +588,29 @@ registry.registerPath({
   request: { params: offrampOrderParamsSchema },
   responses: {
     200: { description: "OK", content: { "application/json": { schema: offrampOrderStatusResponseSchema } } },
+    401: { description: "Order access token required (code: unauthorized)", content: { "application/json": { schema: railErrorResponseSchema } } },
     ...internalErrorResponses,
+  },
+});
+
+registry.registerComponent("securitySchemes", "bearerAuth", { type: "http", scheme: "bearer" });
+
+registry.registerPath({
+  method: "get",
+  path: "/fees/report",
+  summary: "Platform fees charged, per UTC day and asset, with the policy behind them",
+  description:
+    "Internal endpoint. Not part of the public data API: an operator report over the fee " +
+    "ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.",
+  "x-internal": true,
+  security: [{ bearerAuth: [] }],
+  request: { query: feeReportQuerySchema },
+  responses: {
+    200: { description: "OK", content: { "application/json": { schema: feeReportResponseSchema } } },
+    400: { description: "Bad date range", content: { "application/json": { schema: errorResponseSchema } } },
+    401: { description: "Missing or wrong report token", content: { "application/json": { schema: errorResponseSchema } } },
+    500: { description: "The fee ledger could not be read", content: { "application/json": { schema: errorResponseSchema } } },
+    503: { description: "Fee reporting is not configured on this deployment", content: { "application/json": { schema: errorResponseSchema } } },
   },
 });
 

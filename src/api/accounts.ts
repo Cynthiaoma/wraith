@@ -43,7 +43,7 @@ export function createAccountsRouter(): Router {
     "/:address/balance",
     async (req: Request, res: Response, next: NextFunction) => {
       try {
-        const { address } = req.params;
+        const address = req.params.address as string;
         const network = requestNetwork(req);
         const rows = await queryBalances(address, network);
 
