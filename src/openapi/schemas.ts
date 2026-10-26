@@ -906,6 +906,30 @@ export const ngnCustomerStatusResponseSchema = z.object({
   status: z.string().optional(),
 });
 
+export const ngnDataBundlesQuerySchema = z.object({
+  provider: z.string().optional().openapi({
+    description: "Network to filter by, case-insensitive. Omit it to list every provider's bundles.",
+    example: "MTN",
+  }),
+});
+
+export const ngnDataBundleSchema = z.object({
+  provider: z.string().openapi({ example: "MTN" }),
+  code: z.string().openapi({
+    description:
+      "Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.",
+    example: "mtn-1gb-30d",
+  }),
+  label: z.string().openapi({ example: "1 GB / 30 days" }),
+  megabytes: z.number().int(),
+  validityDays: z.number().int(),
+  amountNgn: z.number().openapi({ description: "Price in naira." }),
+});
+
+export const ngnDataBundlesResponseSchema = z.object({
+  bundles: z.array(ngnDataBundleSchema),
+});
+
 
 
 

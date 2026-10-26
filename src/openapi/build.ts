@@ -58,6 +58,8 @@ import {
   railErrorResponseSchema,
   ngnCustomerStatusQuerySchema,
   ngnCustomerStatusResponseSchema,
+  ngnDataBundlesQuerySchema,
+  ngnDataBundlesResponseSchema,
   feeReportQuerySchema,
   feeReportResponseSchema,
   feesQuerySchema,
@@ -126,6 +128,23 @@ registry.registerPath({
     502: { description: "Provider error", content: { "application/json": { schema: railErrorResponseSchema } } },
     503: { description: "Naira rails not configured on this deployment", content: { "application/json": { schema: railErrorResponseSchema } } },
     504: { description: "Provider did not respond in time", content: { "application/json": { schema: railErrorResponseSchema } } },
+  },
+});
+
+registry.registerPath({
+  method: "get",
+  path: "/ngn/bills/data-bundles",
+  summary: "Data bundle catalogue",
+  description:
+    "Read-only list of the data bundles a `data` bill can buy, optionally filtered by " +
+    "provider. Data is sold as catalogue items rather than arbitrary amounts, so the " +
+    "client picks one of these. Cached for five minutes.",
+  request: { query: ngnDataBundlesQuerySchema },
+  responses: {
+    200: {
+      description: "OK",
+      content: { "application/json": { schema: ngnDataBundlesResponseSchema } },
+    },
   },
 });
 
