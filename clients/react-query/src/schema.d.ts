@@ -382,6 +382,64 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ngn/bills/data-bundles": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Data bundle catalogue
+         * @description Read-only list of the data bundles a `data` bill can buy, optionally filtered by provider. Data is sold as catalogue items rather than arbitrary amounts, so the client picks one of these. Cached for five minutes.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Network to filter by, case-insensitive. Omit it to list every provider's bundles. */
+                    provider?: string;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            bundles: {
+                                /** @example MTN */
+                                provider: string;
+                                /**
+                                 * @description Opaque bundle identifier. Pass it back unchanged when buying the bundle; do not parse it.
+                                 * @example mtn-1gb-30d
+                                 */
+                                code: string;
+                                /** @example 1 GB / 30 days */
+                                label: string;
+                                megabytes: number;
+                                validityDays: number;
+                                /** @description Price in naira. */
+                                amountNgn: number;
+                            }[];
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/metrics": {
         parameters: {
             query?: never;
