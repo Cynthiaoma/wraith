@@ -67,6 +67,23 @@ export const httpRequestDurationSeconds = new Histogram({
 });
 
 /**
+ * Total payment-provider calls by endpoint path and outcome.
+ *
+ * Every naira operation is an HTTP call to Linq through src/linq/http.ts.
+ * This counter is incremented inside `linqCall` so no rail can forget to do it.
+ *
+ * Labels are bounded:
+ *  - `endpoint`: the normalized endpoint path (e.g. "/b2b/offramp", "/b2b/status")
+ *  - `outcome`: one of "success", "4xx", "5xx", "429", or "timeout"
+ */
+export const providerCallsTotal = new Counter({
+  name: "provider_calls_total",
+  help: "Total payment-provider calls by endpoint path and outcome",
+  labelNames: ["endpoint", "outcome"] as const,
+  registers: [registry],
+});
+
+/**
  * Time spent inside a payment-provider call, separately from the request.
  *
  * `http_request_duration_seconds` says a request took twelve seconds; this

@@ -26,6 +26,7 @@
  */
 
 import {
+  providerCallsTotal,
   providerRateLimitTotal,
   providerRateLimitWaitSeconds,
   providerRequestDurationSeconds,
@@ -152,8 +153,37 @@ export type LinqOperation =
   | "bill_pay"
   | "bill_status";
 
-/** How a provider call ended, for the latency histogram's `outcome` label. */
-export type ProviderCallOutcome = "success" | "error" | "timeout";
+/** How a provider call ended, for `provider_calls_total` and latency metrics. */
+export type ProviderCallOutcome = "success" | "4xx" | "5xx" | "429" | "timeout";
+
+/**
+ * Normalise a provider path into a bounded endpoint path label.
+ *
+ * Drops query strings (e.g. `/b2b/status?id=...` -> `/b2b/status`) and ensures
+ * leading slash, so metrics labels stay strictly bounded.
+ */
+export function normalizeEndpointPath(path: string): string {
+  const queryIndex = path.indexOf("?");
+  const clean = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  return clean.startsWith("/") ? clean : `/${clean}`;
+}
+
+/**
+ * Classify a failure into one of the bounded outcome categories:
+ * - "timeout": timeout or abort
+ * - "429": rate limited
+ * - "4xx": client-caused 4xx error (e.g. 400 bad request)
+ * - "5xx": provider-caused 5xx error or connection failure
+ */
+export function classifyFailureOutcome(err: unknown): "4xx" | "5xx" | "429" | "timeout" {
+  if (linqTransport(err) === "timeout") return "timeout";
+  if (err instanceof LinqError) {
+    if (err.status === 429) return "429";
+    if (err.status >= 400 && err.status < 500) return "4xx";
+    if (err.status >= 500) return "5xx";
+  }
+  return "5xx";
+}
 
 export interface LinqCallOptions {
   /**
@@ -454,9 +484,12 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
       }
     }
   } catch (err) {
-    outcome = linqTransport(err) === "timeout" ? "timeout" : "error";
+    outcome = classifyFailureOutcome(err);
     throw err;
   } finally {
+    const endpoint = normalizeEndpointPath(path);
+    providerCallsTotal.inc({ endpoint, outcome });
+
     // Observed on failure too. A call that spent the full 35 seconds and then
     // failed is the one an operator most needs to see, and dropping it would
     // make this histogram describe only the healthy path.
@@ -474,7 +507,7 @@ export async function linqCall<T>(path: string, options: LinqCallOptions): Promi
       "linq",
       outcome === "success",
       Math.round(elapsedMs),
-      outcome === "success" ? undefined : outcome,
+      outcome === "timeout" ? "timeout" : outcome === "success" ? undefined : "error",
     );
   }
 }
