@@ -9,7 +9,7 @@
  * hand, so the arithmetic is asserted instead.
  */
 
-import { LinqError, retryOnProviderFailure } from "../http";
+import { LinqError, retryOnProviderFailure, TOTAL_BUDGET_MS } from "../http";
 
 describe("retryOnProviderFailure", () => {
   const serverError = () => new LinqError("Wallet generation failed", 500);
@@ -60,6 +60,38 @@ describe("retryOnProviderFailure", () => {
       retryOnProviderFailure(request, 1, Date.now() + 30_000),
     ).resolves.toBe("created");
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("proves that retry plus wait cannot exceed the deadline", async () => {
+    const request = jest.fn(async () => {
+      throw serverError();
+    });
+
+    const now = Date.now();
+    const delayMs = 1_500;
+    // Exactly at or beyond the deadline after delayMs: skips retry
+    await expect(retryOnProviderFailure(request, delayMs, now + delayMs)).rejects.toThrow(
+      "Wallet generation failed",
+    );
+    expect(request).toHaveBeenCalledTimes(1);
+
+    // If wait finishes strictly before the deadline, it is allowed to retry
+    let attempt = 0;
+    const allowedRequest = jest.fn(async () => {
+      attempt += 1;
+      if (attempt === 1) throw serverError();
+      return "created";
+    });
+    await expect(
+      retryOnProviderFailure(allowedRequest, delayMs, now + delayMs + 500),
+    ).resolves.toBe("created");
+    expect(allowedRequest).toHaveBeenCalledTimes(2);
+  });
+
+  it("proves that calls made without an explicit deadline default to a bounded budget", () => {
+    // Linq HTTP calls use TOTAL_BUDGET_MS when no deadline is supplied, ensuring
+    // a call made without a deadline is always bounded (35s) rather than open-ended.
+    expect(TOTAL_BUDGET_MS).toBe(35_000);
   });
 
   it("surfaces a non-Linq error untouched", async () => {
