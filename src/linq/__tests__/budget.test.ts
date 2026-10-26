@@ -88,10 +88,15 @@ describe("retryOnProviderFailure", () => {
     expect(allowedRequest).toHaveBeenCalledTimes(2);
   });
 
-  it("proves that calls made without an explicit deadline default to a bounded budget", () => {
-    // Linq HTTP calls use TOTAL_BUDGET_MS when no deadline is supplied, ensuring
-    // a call made without a deadline is always bounded (35s) rather than open-ended.
+  it("pins the default budget, which bounds a call made without a deadline", () => {
+    // linqCall does `options.deadline ?? Date.now() + TOTAL_BUDGET_MS`, so this
+    // constant is what stops a call with no deadline retrying open-endedly.
+    //
+    // This asserts the value, not the wiring — it catches the number being
+    // edited, not the `??` being removed. The behaviour itself is covered by
+    // the deadline tests above, which drive retryOnProviderFailure directly.
     expect(TOTAL_BUDGET_MS).toBe(35_000);
+    expect(Number.isFinite(TOTAL_BUDGET_MS)).toBe(true);
   });
 
   it("surfaces a non-Linq error untouched", async () => {
