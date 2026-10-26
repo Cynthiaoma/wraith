@@ -10,7 +10,7 @@
  * - Timeout is recorded as timeout, not generic failure
  * - Tested against fake provider (never real Linq)
  */
-import { linqCall } from "../../linq/http";
+import { linqCall, normalizeEndpointPath } from "../../linq/http";
 import { renderMetrics, _resetMetrics } from "../../metrics";
 import { installFakeLinq, type FakeLinq } from "../fakes/linqProvider";
 
@@ -193,5 +193,36 @@ describe("provider_calls_total", () => {
     for (const line of metricLines) {
       expect(line).toMatch(/^provider_calls_total\{endpoint="[^"]+",outcome="(success|4xx|5xx|429|timeout)"\} \d+$/);
     }
+  });
+});
+
+describe("normalizeEndpointPath", () => {
+  it("leaves the static provider paths untouched", () => {
+    for (const path of [
+      "/b2b/onramp",
+      "/b2b/onramp/status",
+      "/b2b/bills/pay",
+      "/b2b/customers/kyc",
+      "/onramprate",
+    ]) {
+      expect(normalizeEndpointPath(path)).toBe(path);
+    }
+  });
+
+  it("collapses identifier-shaped segments so the label stays bounded", () => {
+    // No Linq path carries an id today. This is the guard for the first one
+    // that does: without it, one series per order would grow /metrics until
+    // the scrape fails.
+    expect(normalizeEndpointPath("/b2b/onramp/status/8571")).toBe("/b2b/onramp/status/:id");
+    expect(normalizeEndpointPath("/b2b/orders/3f2a9c1e4b7d8a60")).toBe("/b2b/orders/:id");
+    expect(normalizeEndpointPath("/b2b/customers/veil_etn2674mxqhkabcdefgh")).toBe(
+      "/b2b/customers/:id",
+    );
+  });
+
+  it("still strips the query string, where references actually travel", () => {
+    expect(normalizeEndpointPath("/b2b/onramp/status?customerRef=veil_abc&orderId=99")).toBe(
+      "/b2b/onramp/status",
+    );
   });
 });

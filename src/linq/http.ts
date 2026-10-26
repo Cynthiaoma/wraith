@@ -165,7 +165,23 @@ export type ProviderCallOutcome = "success" | "4xx" | "5xx" | "429" | "timeout";
 export function normalizeEndpointPath(path: string): string {
   const queryIndex = path.indexOf("?");
   const clean = queryIndex === -1 ? path : path.slice(0, queryIndex);
-  return clean.startsWith("/") ? clean : `/${clean}`;
+  const withSlash = clean.startsWith("/") ? clean : `/${clean}`;
+
+  // Collapse anything that looks like an identifier. Every Linq path today is
+  // a static literal ("/b2b/onramp", "/b2b/bills/status"), so this changes
+  // nothing now — it is here so that the first path carrying an order id or a
+  // customer reference cannot quietly turn this label into one series per
+  // request. An unbounded label does not skew /metrics, it grows it until the
+  // scrape fails, which takes monitoring down at the worst possible moment.
+  return withSlash
+    .split("/")
+    .map(segment =>
+      segment.length > 0 &&
+      (/^\d+$/.test(segment) || /^[0-9a-f-]{16,}$/i.test(segment) || segment.length > 24)
+        ? ":id"
+        : segment,
+    )
+    .join("/");
 }
 
 /**
