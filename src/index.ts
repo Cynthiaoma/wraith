@@ -9,9 +9,11 @@ import { attachWebSocketServer } from "./ws";
 import { attachGraphQLSubscriptions, SUBSCRIPTIONS_PATH } from "./graphql/subscriptions";
 import { startWebhookWorker } from "./workers/webhooks";
 import { startPartitionRetentionJob } from "./jobs/retention";
+import { startOrderReconciliationJob } from "./jobs/orderReconciliation";
 import { initTokenCache } from "./tokenCache";
 import { enabledNetworks } from "./network";
 import { onlyAddsUniqueConstraints, pushSchema } from "./schemaGuard";
+import { auditMigrationHistory, missingSchemaObjects } from "./schemaState";
 import { startOhlcRefreshWorker } from "./workers/ohlc-refresh";
 import { getOhlcRefreshIntervalMs } from "./ohlcConfig";
 import { validateEnv } from "./validateEnv";
@@ -20,7 +22,7 @@ import { logger } from "./logger";
 const PORT = parseInt(process.env.PORT ?? "3000", 10);
 
 async function main() {
-  // First thing in `main`, not at module load: a missing DATABASE_URL should
+  // First thing in `main`, not at module load. A missing DATABASE_URL should
   // stop the process with the name of what is missing, rather than surface
   // later as a connection error that says nothing about configuration. It runs
   // here rather than top-level because the startup-wiring tests import this
@@ -28,16 +30,120 @@ async function main() {
   validateEnv();
 
   const bootId = randomUUID();
+
+  // ── What the database actually has ──────────────────────────────────────────
+  // Record the migration-history finding first. Diagnostic only: this database
+  // was built by `db push`, so an absent or partial `_prisma_migrations` is the
+  // expected finding (docs/drift-recovery.md records the investigation), and
+  // this never writes to it, never baselines and never resolves a migration.
+  // Doing so automatically would mark an unrecorded migration as applied —
+  // hiding the one that genuinely is not.
+  try {
+    const audit = await auditMigrationHistory(prisma);
+    logger.info("schema.migrations.audit", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      historyTablePresent: audit.historyTablePresent,
+      historySchema: audit.historySchema,
+      applied: audit.appliedCount,
+      failed: audit.failedCount,
+      unrecorded: audit.unrecorded.length,
+      unexpected: audit.unexpected.length,
+    });
+    if (!audit.historyTablePresent) {
+      logger.warn("schema.migrations.history_absent", {
+        route: "startup",
+        status: 0,
+        durationMs: 0,
+        requestId: bootId,
+        unrecorded: audit.unrecorded.length,
+      });
+    } else if (audit.unrecorded.length > 0) {
+      logger.warn("schema.migrations.unrecorded", {
+        route: "startup",
+        status: 0,
+        durationMs: 0,
+        requestId: bootId,
+        count: audit.unrecorded.length,
+        migrations: audit.unrecorded,
+      });
+    }
+    if (audit.unexpected.length > 0) {
+      logger.error("schema.migrations.unexpected", {
+        route: "startup",
+        status: 0,
+        durationMs: 0,
+        requestId: bootId,
+        count: audit.unexpected.length,
+        migrations: audit.unexpected,
+      });
+    }
+    if (audit.failedCount > 0) {
+      logger.error("schema.migrations.failed_rows", {
+        route: "startup",
+        status: 0,
+        durationMs: 0,
+        requestId: bootId,
+        count: audit.failedCount,
+      });
+    }
+  } catch (err) {
+    // A history that cannot be read is not an empty history. The drift check
+    // below is the one that gates startup; this is the record that the audit
+    // itself failed, so nobody mistakes silence for "no unrecorded migrations".
+    logger.warn("schema.migrations.audit_failed", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      errorName: (err as Error)?.name ?? "unknown error",
+    });
+  }
+
+  // Detect before converging, so a deploy that is about to bring a column into
+  // existence says so in the log instead of changing the schema silently. If
+  // the database cannot be inspected, refuse to start: serving on an unverified
+  // schema is the state this check exists to rule out.
+  let missing = await missingSchemaObjects(prisma).catch((err) => {
+    logger.error("schema.drift.check_failed", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      errorName: (err as Error)?.name ?? "unknown error",
+    });
+    process.exit(1);
+  });
+  if (missing.length > 0) {
+    logger.warn("schema.drift.detected", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      count: missing.length,
+      tables: missing.map((object) => object.table),
+      missingColumns: missing.map((object) => object.missingColumns),
+    });
+  }
+
   // Converge the schema on every startup, so a deploy needs no separate
   // pre-deploy step.
   //
   // This is `db push` rather than `migrate deploy` because the migration
-  // history cannot support the latter: `prisma/migrations` holds 7 migrations
-  // covering 5 tables, while the schema defines 15. TokenTransfer,
-  // AccountSummary, IndexerState and OfframpOrder have no migration at all —
-  // this database was built by `db push` from the beginning. Switching without
-  // baselining production first would create five tables and leave the app
-  // crashing on the other ten.
+  // history cannot support the latter: the committed migrations do not create
+  // the `wraith` schema or most of the tables — TokenTransfer, OfframpOrder
+  // and NgnOrder have no migration at all — because this database was built by
+  // `db push` from the beginning. A fresh database aborts on the first
+  // migration (`schema "wraith" does not exist`); this one aborts with P3005
+  // ("database schema is not empty"). docs/drift-recovery.md records the
+  // investigation and the evidence.
+  //
+  // The drift detected above is logged, applied if additive, and checked again
+  // below. Detection is not a substitute for convergence: an insertion into a
+  // column the database does not have is the outage this guards against, and on
+  // the offramp it means a real provider order with no local record.
   //
   // `--accept-data-loss` was removed deliberately. With it, any change Prisma
   // reads as destructive — a renamed column, a narrowed type, a dropped field
@@ -79,6 +185,33 @@ async function main() {
   }
   logger.info("schema.converge.ready", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
 
+  // Verify, rather than assume, that convergence worked. A database still
+  // behind the code after the push is fatal: the alternative is serving routes
+  // whose writes fail, which is exactly the state #277 describes.
+  missing = await missingSchemaObjects(prisma).catch((err) => {
+    logger.error("schema.drift.verify_failed", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      errorName: (err as Error)?.name ?? "unknown error",
+    });
+    process.exit(1);
+  });
+  if (missing.length > 0) {
+    logger.error("schema.drift.unresolved", {
+      route: "startup",
+      status: 0,
+      durationMs: 0,
+      requestId: bootId,
+      count: missing.length,
+      tables: missing.map((object) => object.table),
+      missingColumns: missing.map((object) => object.missingColumns),
+    });
+    process.exit(1);
+  }
+  logger.info("schema.verified", { route: "startup", status: 0, durationMs: 0, requestId: bootId });
+
   // ── Graceful shutdown ──────────────────────────────────────────────────────
   let stopOhlcRefreshWorker: (() => void) | undefined;
   const shutdown = async (signal: string) => {
@@ -111,6 +244,9 @@ async function main() {
 
   // ── Start partition retention scheduler ───────────────────────────────────
   startPartitionRetentionJob();
+
+  // The webhook is the fast path; this catches orders whose event never arrived.
+  startOrderReconciliationJob();
 
   // Seed token metadata for every served network before handling read paths.
   // API-only deployments skip the indexer, so without this explicit seed their

@@ -384,6 +384,7 @@ describe("POST /webhooks/linq", () => {
     const event = {
       event: "order.completed",
       orderId: "00000000-0000-4000-8000-000000000002",
+      network: "mainnet",
       status: "completed",
       amountStableCoin: 10,
     };

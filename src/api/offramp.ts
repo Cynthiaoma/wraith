@@ -6,22 +6,26 @@ import { z } from "zod";
 
 import { prisma } from "../db";
 import { requestNetwork } from "../middleware/network";
+import { recordOrderCreated, recordOrderTerminal, terminalStatusOf } from "../metrics";
 import { statusForClients } from "../linq/statusForClients";
 import {
   bearerToken,
   isOrderId,
   issueOrderCredentials,
   tokenMatches,
-} from "../linq/orderAccess";
-import {
-  LinqError,
+} from "../linq/orderAccess";import {
   checkStellarTrustline,
   createOfframpOrder,
   getOfframpStatus,
   verifyBank,
 } from "../linq/client";
 import { ngnPerCoin } from "./ngn";
+import { sendError, sendLinqError } from "./errors";
 import { type OnrampCoin } from "../linq/onramp";
+
+// Re-exported so existing imports of the scrubber from this module keep
+// working; its home is now `./errors.ts`, where the shared error writer lives.
+export { withoutProviderName } from "./errors";
 
 /**
  * Offramp router - mounts at /offramp
@@ -40,41 +44,14 @@ function isConfigured(): boolean {
 }
 
 /**
- * The payout provider is not named to users.
- *
- * Their own messages are kept, because they explain a rejected account or an
- * amount limit better than a generic line would, but with the provider's name
- * taken out: a user-facing error is the one place it still leaked.
+ * This rail's `sendLinqError`: the shared writer with the provider's name
+ * taken out of every message and this rail's own fallback text.
  */
-export function withoutProviderName(message: string): string {
-  if (/rate.?limit|too many requests/i.test(message)) {
-    return "The payout service is busy right now. Try again in a few seconds.";
-  }
-  if (/wallet generation failed/i.test(message)) {
-    // The provider could not mint the order's deposit address: their fault,
-    // transient, and meaningless to a user in its own words.
-    return "The payout service couldn't set up this order. Try again in a minute.";
-  }
-  if (/LINQ_API_KEY/i.test(message)) return "Cash-out is not available right now";
-  const replaced = message.replace(/linq(?:'s)?/gi, "the payout service");
-  return replaced.charAt(0).toUpperCase() + replaced.slice(1);
-}
-
-/** Map a LinqError onto the response, preserving their message and status. */
-function sendLinqError(res: Response, err: unknown): void {
-  if (err instanceof LinqError) {
-    // A 5xx from Linq is ours to own as a 502: the caller did nothing wrong.
-    const status = err.status >= 500 ? 502 : err.status;
-    // See the note in `api/ngn.ts`: the code is the stable half of the answer.
-    // It is a provider-neutral identifier, so unlike the message it needs no
-    // scrubbing — `withoutProviderName` exists for the prose, not for this.
-    res.status(status).json({
-      error: withoutProviderName(err.message),
-      ...(err.code ? { code: err.code } : {}),
-    });
-    return;
-  }
-  res.status(500).json({ error: "Offramp request failed" });
+function sendLinqErrorScoped(res: Response, err: unknown): void {
+  sendLinqError(res, err, {
+    scrubMessage: true,
+    fallbackMessage: "Offramp request failed",
+  });
 }
 
 /**
@@ -110,8 +87,13 @@ function amountSchema(max: number) {
  * the same thing". Amounts are normalised numerically so "50" and "50.00" match.
  * HMAC with the provider key, which is never stored beside the row, because a
  * plain hash of a ten-digit account number can be reversed by trying them all.
+ *
+ * Returns null rather than minting without a key. `createHmac` accepts an empty
+ * one, and an HMAC keyed with "" is a plain hash anyone can recompute, which is
+ * exactly the reversal described above. The router's `isConfigured` gate makes
+ * that unreachable today; this keeps it unreachable if the gate ever moves.
  */
-function requestFingerprint(r: {
+export function requestFingerprint(r: {
   amountNGN?: unknown;
   amountStableCoin?: unknown;
   bankAccount: string;
@@ -119,9 +101,13 @@ function requestFingerprint(r: {
   accountName: string;
   refundAddress: unknown;
   walletAddress: string;
-}): string {
+}): string | null {
+  const key = process.env.LINQ_API_KEY;
+  // Checked trimmed, as `isConfigured` does, but the key itself is used as-is:
+  // trimming it would change every fingerprint already stored.
+  if (!key?.trim()) return null;
   const amount = (v: unknown) => (v == null ? "" : String(Number(v)));
-  return createHmac("sha256", process.env.LINQ_API_KEY ?? "")
+  return createHmac("sha256", key)
     .update(
       JSON.stringify([
         amount(r.amountNGN),
@@ -162,7 +148,7 @@ async function replayOrder(
   // The key alone is not proof of ownership; the wallet that placed the order
   // has to match too, and nothing about the order is said otherwise.
   if (existing.walletAddress !== request.walletAddress) {
-    res.status(409).json({ error: "This idempotencyKey has already been used" });
+    sendError(res, 409, "idempotency_conflict", "This idempotencyKey has already been used");
     return;
   }
   // An idempotency key promises "this key means this request". Replaying it with
@@ -183,19 +169,24 @@ async function replayOrder(
         ? sameAmount(existing.amountStableCoin, request.amountStableCoin)
         : false;
   if (!amountMatches) {
-    res.status(409).json({
-      error:
-        "This idempotencyKey was used for a different request. Use a new key for a new order.",
-    });
+    sendError(
+      res,
+      409,
+      "idempotency_conflict",
+      "This idempotencyKey was used for a different request. Use a new key for a new order.",
+    );
     return;
   }
   // The amounts above are all the row stores of its own accord, so a replay that
   // changed only the destination used to pass. The stored fingerprint covers the
   // rest. A row without one predates it and can only be held to the amount.
   if (existing.requestHash != null && existing.requestHash !== request.requestHash) {
-    res.status(409).json({
-      error: "This idempotencyKey was used with different order details",
-    });
+    sendError(
+      res,
+      409,
+      "idempotency_conflict",
+      "This idempotencyKey was used with different order details",
+    );
     return;
   }
   // A retry usually means the first response never arrived, and with it the
@@ -238,7 +229,10 @@ export function createOrderLookupLimiter(): RateLimitRequestHandler {
     skipSuccessfulRequests: true,
     standardHeaders: true,
     legacyHeaders: false,
-    message: { error: "Too many failed order lookups, please try again later." },
+    message: {
+      error: "Too many failed order lookups, please try again later.",
+      code: "veil_rate_limited",
+    },
   });
 }
 
@@ -286,7 +280,7 @@ export function createOfframpRouter(
   // hear, and is true of any build without the secret.
   router.use((_req: Request, res: Response, next: NextFunction) => {
     if (!isConfigured()) {
-      res.status(503).json({ error: "Offramp is not configured on this deployment" });
+      sendError(res, 503, "not_configured", "Offramp is not configured on this deployment");
       return;
     }
     next();
@@ -375,7 +369,7 @@ export function createOfframpRouter(
         : COINS[String(supplied).trim().toLowerCase()];
 
     if (!resolvedCoin) {
-      res.status(400).json({ error: `coin must be one of: ${Object.keys(COINS).join(", ")}` });
+      sendError(res, 400, "invalid_coin", `coin must be one of: ${Object.keys(COINS).join(", ")}`);
       return;
     }
     if (supplied === undefined) logCoinlessRateRequest(req);
@@ -395,45 +389,46 @@ export function createOfframpRouter(
       rateCacheByCoins.set(resolvedCoin, { at: Date.now(), body });
       res.json(body);
     } catch (err) {
-      sendLinqError(res, err);
+      sendLinqErrorScoped(res, err);
     }
   });
 
   router.post("/verify-bank", async (req: Request, res: Response) => {
     const { bankCode, accountNumber } = req.body ?? {};
     if (typeof bankCode !== "string" || typeof accountNumber !== "string") {
-      res.status(400).json({ error: "bankCode and accountNumber are required" });
+      sendError(res, 400, "invalid_request", "bankCode and accountNumber are required");
       return;
     }
     try {
       res.json(await verifyBank(bankCode, accountNumber));
     } catch (err) {
-      sendLinqError(res, err);
+      sendLinqErrorScoped(res, err);
     }
   });
 
   router.get("/trustline", async (req: Request, res: Response) => {
     const address = String(req.query.address ?? "");
     if (!address) {
-      res.status(400).json({ error: "address is required" });
+      sendError(res, 400, "invalid_request", "address is required");
       return;
     }
     // Worth saying plainly, because it is the mistake this endpoint exists to
     // catch: a Veil wallet address is a CONTRACT (C...), which Linq rejects.
     // The refund address must be the classic fee-payer holding the trustline.
     if (address.startsWith("C")) {
-      res.status(400).json({
-        error:
-          "A contract address cannot receive a refund. Use the classic fee-payer address.",
-        valid: false,
-        trustsUSDC: false,
-      });
+      sendError(
+        res,
+        400,
+        "invalid_address",
+        "A contract address cannot receive a refund. Use the classic fee-payer address.",
+        { valid: false, trustsUSDC: false },
+      );
       return;
     }
     try {
       res.json(await checkStellarTrustline(address));
     } catch (err) {
-      sendLinqError(res, err);
+      sendLinqErrorScoped(res, err);
     }
   });
 
@@ -459,10 +454,12 @@ export function createOfframpRouter(
       typeof walletAddress !== "string" ||
       typeof idempotencyKey !== "string"
     ) {
-      res.status(400).json({
-        error:
-          "bankAccount, bankCode, bankName, accountName, walletAddress and idempotencyKey are required",
-      });
+      sendError(
+        res,
+        400,
+        "invalid_request",
+        "bankAccount, bankCode, bankName, accountName, walletAddress and idempotencyKey are required",
+      );
       return;
     }
 
@@ -470,7 +467,7 @@ export function createOfframpRouter(
     // provider: `Number("abc")` is NaN and `Number` also accepts negatives and
     // Infinity, and none of those should be able to start a payout.
     if (amountNGN == null && amountStableCoin == null) {
-      res.status(400).json({ error: "amountNGN or amountStableCoin is required" });
+      sendError(res, 400, "invalid_request", "amountNGN or amountStableCoin is required");
       return;
     }
     const parsedAmounts: { amountNGN?: number; amountStableCoin?: number } = {};
@@ -478,9 +475,12 @@ export function createOfframpRouter(
       const max = amountCeiling("OFFRAMP_MAX_AMOUNT_NGN", DEFAULT_MAX_AMOUNT_NGN);
       const parsed = amountSchema(max).safeParse(amountNGN);
       if (!parsed.success) {
-        res
-          .status(400)
-          .json({ error: `amountNGN must be a positive number no greater than ${max}` });
+        sendError(
+          res,
+          400,
+          "invalid_request",
+          `amountNGN must be a positive number no greater than ${max}`,
+        );
         return;
       }
       parsedAmounts.amountNGN = parsed.data;
@@ -492,9 +492,12 @@ export function createOfframpRouter(
       );
       const parsed = amountSchema(max).safeParse(amountStableCoin);
       if (!parsed.success) {
-        res.status(400).json({
-          error: `amountStableCoin must be a positive number no greater than ${max}`,
-        });
+        sendError(
+          res,
+          400,
+          "invalid_request",
+          `amountStableCoin must be a positive number no greater than ${max}`,
+        );
         return;
       }
       parsedAmounts.amountStableCoin = parsed.data;
@@ -508,6 +511,10 @@ export function createOfframpRouter(
       refundAddress,
       walletAddress,
     });
+    if (requestHash === null) {
+      res.status(503).json({ error: "Offramp is not configured on this deployment" });
+      return;
+    }
     const replayOf = { walletAddress, ...parsedAmounts, requestHash };
 
     try {
@@ -574,6 +581,8 @@ export function createOfframpRouter(
         },
       });
 
+      recordOrderCreated("offramp");
+
       res.setHeader("Cache-Control", "no-store");
       res.status(201).json({ ...order, id: creds.orderId, accessToken: creds.token });
     } catch (err) {
@@ -594,7 +603,7 @@ export function createOfframpRouter(
           // Nothing of the database failure is passed on; fall through.
         }
       }
-      if (!res.headersSent) sendLinqError(res, err);
+      if (!res.headersSent) sendLinqErrorScoped(res, err);
     }
   });
 
@@ -608,7 +617,7 @@ export function createOfframpRouter(
     const token = bearerToken(req);
     if (!token) {
       res.setHeader("WWW-Authenticate", "Bearer");
-      res.status(401).json({ error: "An order access token is required" });
+      sendError(res, 401, "unauthorized", "An order access token is required");
       return;
     }
 
@@ -620,15 +629,16 @@ export function createOfframpRouter(
           })
         : null;
     } catch (err) {
+      // Logged by name only: nothing of the database failure is passed on.
       console.error("[offramp] order lookup failed:", (err as Error)?.name);
-      res.status(500).json({ error: "Offramp request failed" });
+      sendError(res, 500, "internal_error", "Offramp request failed");
       return;
     }
 
     // An id that does not exist and an id the token does not belong to get the
     // same answer, or the difference would list the orders that are real.
     if (!row || !tokenMatches(token, row.accessTokenHash)) {
-      res.status(404).json({ error: "Order not found" });
+      sendError(res, 404, "order_not_found", "Order not found");
       return;
     }
 
@@ -638,6 +648,8 @@ export function createOfframpRouter(
     // that settled twenty minutes ago is worse than a slow answer.
     try {
       const live = await getOfframpStatus(row.orderId);
+      const wasTerminal = terminalStatusOf(row.status);
+      const isTerminal = terminalStatusOf(live.status);
       if (live.status !== row.status) {
         await prisma.offrampOrder.update({
           where: { network_orderId: { network: net, orderId: row.orderId } },
@@ -648,6 +660,7 @@ export function createOfframpRouter(
           },
         });
       }
+      if (isTerminal && !wasTerminal) recordOrderTerminal("offramp", live.status);
       res.json({
         ...live,
         id: row.publicId,

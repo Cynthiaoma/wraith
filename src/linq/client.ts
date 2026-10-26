@@ -31,7 +31,7 @@ export { LinqError, retryOnProviderFailure } from "./http";
 const RATE_LIMIT_RETRIES = 2;
 
 /** Every offramp request: the shared client, with this rail's 429 retry. */
-function call<T>(path: string, options: LinqCallOptions = {}): Promise<T> {
+function call<T>(path: string, options: LinqCallOptions): Promise<T> {
   return linqCall<T>(path, { rateLimitRetries: RATE_LIMIT_RETRIES, ...options });
 }
 
@@ -48,7 +48,7 @@ export interface LinqRate {
  * binding rate is the one locked into an order at creation.
  */
 export function getRate(): Promise<LinqRate> {
-  return call<LinqRate>("/b2b/rate", { auth: false });
+  return call<LinqRate>("/b2b/rate", { auth: false, operation: "offramp_rate" });
 }
 
 // ─── Bank verification ───────────────────────────────────────────────────────
@@ -71,6 +71,7 @@ export function verifyBank(bankCode: string, accountNumber: string): Promise<Ver
   return call<VerifiedBank>("/b2b/verifybank", {
     method: "POST",
     body: { bankCode, accountNumber },
+    operation: "offramp_verify_bank",
   });
 }
 
@@ -98,6 +99,7 @@ export async function checkStellarTrustline(address: string): Promise<TrustlineC
   try {
     return await call<TrustlineCheck>(
       `/b2b/stellar/trustline?address=${encodeURIComponent(address)}`,
+      { operation: "offramp_trustline" },
     );
   } catch (err) {
     if (err instanceof LinqError && err.status === 503) {
@@ -162,6 +164,7 @@ export async function createOfframpOrder(
     throw new LinqError(
       "Provide exactly one of amountNGN or amountStableCoin",
       400,
+      "invalid_request",
     );
   }
   // One deadline for the attempt AND its retry, so the two budgets add up to
@@ -171,6 +174,7 @@ export async function createOfframpOrder(
   call<OfframpOrderResponse>("/b2b/offramp", {
     method: "POST",
     deadline,
+    operation: "offramp_order",
     body: {
       ...params,
       chain: "stellar",
@@ -194,5 +198,7 @@ export interface OfframpStatus {
 
 /** Poll an order. The settled amounts here are authoritative, not the request. */
 export function getOfframpStatus(orderId: string): Promise<OfframpStatus> {
-  return call<OfframpStatus>(`/b2b/status?id=${encodeURIComponent(orderId)}`);
+  return call<OfframpStatus>(`/b2b/status?id=${encodeURIComponent(orderId)}`, {
+    operation: "offramp_status",
+  });
 }

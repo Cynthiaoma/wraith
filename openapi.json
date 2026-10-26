@@ -16,6 +16,12 @@
     }
   ],
   "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer"
+      }
+    },
     "schemas": {},
     "parameters": {}
   },
@@ -423,54 +429,203 @@
             }
           },
           "400": {
-            "description": "Bad Request",
+            "description": "Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
             }
           },
           "404": {
-            "description": "Not Found",
+            "description": "Not Found (code: not_found)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (veil_rate_limited ours / rate_limited the provider's)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
             }
           },
           "500": {
-            "description": "Internal Server Error",
+            "description": "Internal Server Error (code: internal_error)",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "Provider error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Naira rails not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Provider did not respond in time",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -527,19 +682,6 @@
                 "schema": {
                   "type": "object",
                   "properties": {
-                    "ok": {
-                      "type": "boolean",
-                      "enum": [
-                        true
-                      ]
-                    },
-                    "network": {
-                      "type": "string",
-                      "enum": [
-                        "testnet",
-                        "mainnet"
-                      ]
-                    },
                     "lastIndexedLedger": {
                       "type": "integer",
                       "nullable": true
@@ -596,13 +738,67 @@
                           "nullable": true
                         }
                       }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "healthy",
+                        "degraded"
+                      ]
+                    },
+                    "dependencies": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "status": {
+                            "type": "string",
+                            "enum": [
+                              "ok",
+                              "degraded",
+                              "down",
+                              "unknown"
+                            ]
+                          },
+                          "lastCheckedAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "lastOkAt": {
+                            "type": "string",
+                            "nullable": true,
+                            "format": "date-time"
+                          },
+                          "latencyMs": {
+                            "type": "integer",
+                            "nullable": true
+                          },
+                          "detail": {
+                            "type": "string",
+                            "nullable": true
+                          }
+                        },
+                        "required": [
+                          "name",
+                          "status",
+                          "lastCheckedAt",
+                          "lastOkAt",
+                          "latencyMs",
+                          "detail"
+                        ]
+                      }
                     }
                   },
                   "required": [
-                    "ok",
                     "lastIndexedLedger",
                     "latestLedger",
-                    "lagLedgers"
+                    "lagLedgers",
+                    "status",
+                    "dependencies"
                   ],
                   "additionalProperties": {
                     "nullable": true
@@ -4722,11 +4918,11 @@
             "schema": {
               "type": "string",
               "nullable": true,
-              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+              "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
               "example": "25"
             },
             "required": false,
-            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
+            "description": "The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it.",
             "name": "amount",
             "in": "query"
           }
@@ -5325,11 +5521,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5432,6 +5639,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5458,11 +5694,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5476,11 +5723,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5588,6 +5846,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5614,11 +5901,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5632,11 +5930,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5724,6 +6033,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -5750,11 +6088,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -5768,11 +6117,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6005,6 +6365,35 @@
               }
             }
           },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal Server Error",
             "content": {
@@ -6031,11 +6420,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6049,11 +6449,22 @@
                   "type": "object",
                   "properties": {
                     "error": {
-                      "type": "string"
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
                     }
                   },
                   "required": [
-                    "error"
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6161,6 +6572,35 @@
               }
             }
           },
+          "401": {
+            "description": "Order access token required (code: unauthorized)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
           "404": {
             "description": "Not Found",
             "content": {
@@ -6174,6 +6614,35 @@
                   },
                   "required": [
                     "error"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited (this deployment's or the provider's — the `code` says which)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
                   ]
                 }
               }
@@ -6205,6 +6674,299 @@
                   "type": "object",
                   "properties": {
                     "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Offramp not configured on this deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string",
+                      "description": "Prose for a person. Never branch on it — it changes when the provider rewords an error."
+                    },
+                    "code": {
+                      "type": "string",
+                      "description": "Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.",
+                      "example": "coin_not_available"
+                    },
+                    "retryAfterSeconds": {
+                      "type": "number",
+                      "description": "On a provider 429 only: how long the shared limit asks you to wait."
+                    }
+                  },
+                  "required": [
+                    "error",
+                    "code"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/fees/report": {
+      "get": {
+        "summary": "Platform fees charged, per UTC day and asset, with the policy behind them",
+        "description": "Internal endpoint. Not part of the public data API: an operator report over the fee ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.",
+        "x-internal": true,
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "First UTC date to report, YYYY-MM-DD. Defaults to today."
+            },
+            "required": false,
+            "description": "First UTC date to report, YYYY-MM-DD. Defaults to today.",
+            "name": "from",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "nullable": true,
+              "description": "Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it."
+            },
+            "required": false,
+            "description": "Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it.",
+            "name": "to",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "network": {
+                      "type": "string"
+                    },
+                    "from": {
+                      "type": "string"
+                    },
+                    "to": {
+                      "type": "string"
+                    },
+                    "alarmPercent": {
+                      "type": "number",
+                      "description": "VEIL_FEE_ALARM_PERCENT in force for this report."
+                    },
+                    "days": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "date": {
+                            "type": "string"
+                          },
+                          "assets": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "assetCode": {
+                                  "type": "string"
+                                },
+                                "assetIssuer": {
+                                  "type": "string",
+                                  "nullable": true
+                                },
+                                "quotes": {
+                                  "type": "integer"
+                                },
+                                "feesQuoted": {
+                                  "type": "string",
+                                  "description": "Sum of every fee quoted — what clients were told to charge."
+                                },
+                                "alarms": {
+                                  "type": "integer"
+                                },
+                                "policyIds": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string"
+                                  }
+                                },
+                                "collected": {
+                                  "type": "string",
+                                  "nullable": true,
+                                  "description": "What the fee destination received in this asset that day, per the index. Null when the asset is not indexed — which is not zero."
+                                },
+                                "collectedNote": {
+                                  "type": "string"
+                                }
+                              },
+                              "required": [
+                                "assetCode",
+                                "assetIssuer",
+                                "quotes",
+                                "feesQuoted",
+                                "alarms",
+                                "policyIds",
+                                "collected"
+                              ]
+                            }
+                          }
+                        },
+                        "required": [
+                          "date",
+                          "assets"
+                        ]
+                      }
+                    },
+                    "policies": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "firstSeenAt": {
+                            "type": "string"
+                          },
+                          "policy": {
+                            "type": "object",
+                            "properties": {
+                              "mode": {
+                                "type": "string",
+                                "enum": [
+                                  "flat",
+                                  "percent"
+                                ]
+                              },
+                              "assetCode": {
+                                "type": "string"
+                              },
+                              "assetIssuer": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "destination": {
+                                "type": "string",
+                                "description": "The fee destination — the address `/fees` already publishes."
+                              },
+                              "percent": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "min": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "max": {
+                                "type": "string",
+                                "nullable": true
+                              },
+                              "amount": {
+                                "type": "string",
+                                "nullable": true,
+                                "description": "Flat mode only: the fixed fee."
+                              }
+                            },
+                            "required": [
+                              "mode",
+                              "assetCode",
+                              "assetIssuer",
+                              "destination",
+                              "percent",
+                              "min",
+                              "max",
+                              "amount"
+                            ]
+                          }
+                        },
+                        "required": [
+                          "firstSeenAt",
+                          "policy"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "network",
+                    "from",
+                    "to",
+                    "alarmPercent",
+                    "days",
+                    "policies"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad date range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or wrong report token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "error"
+                  ]
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "The fee ledger could not be read",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "error": {
                       "type": "string"
                     }
                   },
@@ -6216,7 +6978,7 @@
             }
           },
           "503": {
-            "description": "Offramp not configured on this deployment",
+            "description": "Fee reporting is not configured on this deployment",
             "content": {
               "application/json": {
                 "schema": {

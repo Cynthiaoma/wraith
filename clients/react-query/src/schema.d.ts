@@ -239,36 +239,136 @@ export interface paths {
                         };
                     };
                 };
-                /** @description Bad Request */
+                /** @description Bad Request (invalid_request / invalid_network / network_not_enabled / mainnet_only) */
                 400: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
-                /** @description Not Found */
+                /** @description Not Found (code: not_found) */
                 404: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
-                /** @description Internal Server Error */
+                /** @description Rate limited (veil_rate_limited ours / rate_limited the provider's) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Internal Server Error (code: internal_error) */
                 500: {
                     headers: {
                         [name: string]: unknown;
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Provider error */
+                502: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Naira rails not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+                /** @description Provider did not respond in time */
+                504: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -348,10 +448,6 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
-                            /** @enum {boolean} */
-                            ok: true;
-                            /** @enum {string} */
-                            network?: "testnet" | "mainnet";
                             lastIndexedLedger: number | null;
                             latestLedger: number | null;
                             lagLedgers: number | null;
@@ -370,6 +466,19 @@ export interface paths {
                                     [key: string]: unknown;
                                 };
                             };
+                            /** @enum {string} */
+                            status: "healthy" | "degraded";
+                            dependencies: {
+                                name: string;
+                                /** @enum {string} */
+                                status: "ok" | "degraded" | "down" | "unknown";
+                                /** Format: date-time */
+                                lastCheckedAt: string | null;
+                                /** Format: date-time */
+                                lastOkAt: string | null;
+                                latencyMs: number | null;
+                                detail: string | null;
+                            }[];
                         } & {
                             [key: string]: unknown;
                         };
@@ -2319,7 +2428,7 @@ export interface paths {
         get: {
             parameters: {
                 query?: {
-                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is configured, each fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
+                    /** @description The amount being sent, in whole units of the asset. When given and a percentage fee is computed for it; without it each fee is the floor. Optional because shipped clients predate it. */
                     amount?: string | null;
                 };
                 header?: never;
@@ -2684,7 +2793,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2762,6 +2879,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2780,7 +2916,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2791,7 +2935,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2872,6 +3024,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2890,7 +3061,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2901,7 +3080,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2970,6 +3157,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -2988,7 +3194,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -2999,7 +3213,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3125,6 +3347,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Internal Server Error */
                 500: {
                     headers: {
@@ -3143,7 +3384,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3154,7 +3403,15 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3224,6 +3481,25 @@ export interface paths {
                         };
                     };
                 };
+                /** @description Order access token required (code: unauthorized) */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
                 /** @description Not Found */
                 404: {
                     headers: {
@@ -3232,6 +3508,25 @@ export interface paths {
                     content: {
                         "application/json": {
                             error: string;
+                        };
+                    };
+                };
+                /** @description Rate limited (this deployment's or the provider's — the `code` says which) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
@@ -3253,11 +3548,154 @@ export interface paths {
                     };
                     content: {
                         "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
                             error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
                         };
                     };
                 };
                 /** @description Offramp not configured on this deployment */
+                503: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            /** @description Prose for a person. Never branch on it — it changes when the provider rewords an error. */
+                            error: string;
+                            /**
+                             * @description Stable machine-readable reason. Provider codes arrive verbatim; wraith-assigned codes are catalogued in docs/ngn-rails.md.
+                             * @example coin_not_available
+                             */
+                            code: string;
+                            /** @description On a provider 429 only: how long the shared limit asks you to wait. */
+                            retryAfterSeconds?: number;
+                        };
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/fees/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Platform fees charged, per UTC day and asset, with the policy behind them
+         * @description Internal endpoint. Not part of the public data API: an operator report over the fee ledger, behind the VEIL_FEE_REPORT_TOKEN bearer token. Nothing in it identifies a person.
+         */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description First UTC date to report, YYYY-MM-DD. Defaults to today. */
+                    from?: string | null;
+                    /** @description Last UTC date to report, inclusive, YYYY-MM-DD. Defaults to `from`. At most 92 days after it. */
+                    to?: string | null;
+                };
+                header?: never;
+                path?: never;
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description OK */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            network: string;
+                            from: string;
+                            to: string;
+                            /** @description VEIL_FEE_ALARM_PERCENT in force for this report. */
+                            alarmPercent: number;
+                            days: {
+                                date: string;
+                                assets: {
+                                    assetCode: string;
+                                    assetIssuer: string | null;
+                                    quotes: number;
+                                    /** @description Sum of every fee quoted — what clients were told to charge. */
+                                    feesQuoted: string;
+                                    alarms: number;
+                                    policyIds: string[];
+                                    /** @description What the fee destination received in this asset that day, per the index. Null when the asset is not indexed — which is not zero. */
+                                    collected: string | null;
+                                    collectedNote?: string;
+                                }[];
+                            }[];
+                            policies: {
+                                [key: string]: {
+                                    firstSeenAt: string;
+                                    policy: {
+                                        /** @enum {string} */
+                                        mode: "flat" | "percent";
+                                        assetCode: string;
+                                        assetIssuer: string | null;
+                                        /** @description The fee destination — the address `/fees` already publishes. */
+                                        destination: string;
+                                        percent: string | null;
+                                        min: string | null;
+                                        max: string | null;
+                                        /** @description Flat mode only: the fixed fee. */
+                                        amount: string | null;
+                                    };
+                                };
+                            };
+                        };
+                    };
+                };
+                /** @description Bad date range */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Missing or wrong report token */
+                401: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description The fee ledger could not be read */
+                500: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": {
+                            error: string;
+                        };
+                    };
+                };
+                /** @description Fee reporting is not configured on this deployment */
                 503: {
                     headers: {
                         [name: string]: unknown;
