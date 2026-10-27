@@ -344,9 +344,12 @@ export function createOfframpRouter(
   //             this comment becomes the onramp's.
   const COINS: Record<string, OnrampCoin> = { xlm: "xlm", usdc: "usdc" };
 
-  // The rate is computed by ngnPerCoin (shared with the onramp), which
-  // multiplies the NGN/USD rate by the coin's USD price, so both rails quote
-  // from one source.
+  // The rate is computed by ngnPerCoin, which multiplies a NGN/USD rate by the
+  // coin's USD price. The `"offramp"` rail is load-bearing: it reads Linq's
+  // `/b2b/rate`, the sell side, rather than `/onramprate`, the buy side. Those
+  // are different numbers — 1,371.58 against 1,478.55 on 2026-10-27 — and this
+  // endpoint quoting the buy side is what made every cash-out promise about 7%
+  // more naira than the payout delivered, all the way to the receipt.
   //
   // Per-coin cache: every cash-out screen asks for the rate when it opens, and
   // each ask spends the provider allowance all users share.  The rate here is
@@ -382,7 +385,7 @@ export function createOfframpRouter(
     }
 
     try {
-      const rate = await ngnPerCoin(resolvedCoin);
+      const rate = await ngnPerCoin(resolvedCoin, "offramp");
       // Flagged indicative on purpose: the binding rate is the one locked into
       // an order at creation, and a client that caches this one quotes a
       // number the payout will not honour.
